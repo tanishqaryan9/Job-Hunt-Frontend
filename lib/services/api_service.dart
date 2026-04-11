@@ -5,11 +5,8 @@ import '../models/models.dart';
 
 class ApiService {
 
-  // Production backend (Render.com – has cold-start delays up to ~30s)
   static const String _prodUrl = 'https://job-posting-u2lr.onrender.com';
-
   static const _storage = FlutterSecureStorage();
-
   late final Dio _dio;
 
   ApiService() {
@@ -49,9 +46,7 @@ class ApiService {
     try {
       final refreshToken = await _storage.read(key: 'refresh_token');
       if (refreshToken == null) return false;
-
-      final response = await _dio.post('/auth/refresh',
-          data: {'refreshToken': refreshToken});
+      final response = await _dio.post('/auth/refresh', data: {'refreshToken': refreshToken});
       final auth = AuthResponse.fromJson(response.data);
       await _saveTokens(auth);
       return true;
@@ -71,13 +66,8 @@ class ApiService {
     }
   }
 
-  /// Saves tokens obtained externally (e.g. via OAuth2 redirect) without a POST call.
   Future<void> saveTokensDirectly(AuthResponse auth) => _saveTokens(auth);
-
-  Future<void> clearTokens() async {
-    await _storage.deleteAll();
-  }
-
+  Future<void> clearTokens() async => await _storage.deleteAll();
   Future<String?> getAccessToken() => _storage.read(key: 'access_token');
   Future<String?> getRefreshToken() => _storage.read(key: 'refresh_token');
 
@@ -99,25 +89,15 @@ class ApiService {
     return auth;
   }
 
-  /// Backend /auth/signup returns SignupResponseDto (no tokens).
-  /// We automatically log the user in after successful signup so the
-  /// Flutter app receives tokens and the session starts immediately.
   Future<AuthResponse> signup(SignupRequest req) async {
-    // 1. Register the account
     await _dio.post('/auth/signup', data: req.toJson());
-    // 2. Log in with the same credentials to obtain tokens
-    final auth = await login(LoginRequest(
-      username: req.username,
-      password: req.password,
-    ));
+    final auth = await login(LoginRequest(username: req.username, password: req.password));
     return auth;
   }
 
   Future<void> logout() async {
     final refreshToken = await _storage.read(key: 'refresh_token');
-    try {
-      await _dio.post('/auth/logout', data: {'refreshToken': refreshToken});
-    } catch (_) {}
+    try { await _dio.post('/auth/logout', data: {'refreshToken': refreshToken}); } catch (_) {}
     await clearTokens();
   }
 
@@ -144,6 +124,15 @@ class ApiService {
     return UserProfile.fromJson(res.data);
   }
 
+  /// Saves the user's GPS coordinates to the backend so distance-based feed works.
+  Future<UserProfile> updateUserLocation(int userId, double latitude, double longitude) async {
+    final res = await _dio.patch('/users/$userId', data: {
+      'latitude': latitude,
+      'longitude': longitude,
+    });
+    return UserProfile.fromJson(res.data);
+  }
+
   Future<UserProfile> addSkillToUser(int userId, int skillId) async {
     final res = await _dio.post('/users/$userId/skills/$skillId');
     return UserProfile.fromJson(res.data);
@@ -161,22 +150,11 @@ class ApiService {
   // ── PROFILE PHOTO ─────────────────────────────────────
   Future<UserProfile> uploadProfilePhoto(int userId, File imageFile) async {
     final formData = FormData.fromMap({
-      'file': await MultipartFile.fromFile(imageFile.path,
-          filename: 'profile_$userId.jpg'),
+      'file': await MultipartFile.fromFile(imageFile.path, filename: 'profile_$userId.jpg'),
     });
     final res = await _dio.patch('/users/$userId', data: formData,
         options: Options(contentType: 'multipart/form-data'));
     return UserProfile.fromJson(res.data);
-  }
-
-  // ── JOB SKILLS ────────────────────────────────────────
-  Future<Job> addSkillToJob(int jobId, int skillId) async {
-    final res = await _dio.post('/jobs/$jobId/skills/$skillId');
-    return Job.fromJson(res.data);
-  }
-
-  Future<void> removeSkillFromJob(int jobId, int skillId) async {
-    await _dio.delete('/jobs/$jobId/skills/$skillId');
   }
 
   // ── JOBS ──────────────────────────────────────────────
@@ -197,24 +175,47 @@ class ApiService {
     return Job.fromJson(res.data);
   }
 
+  Future<List<Job>> getMyJobs(int userId) async {
+    final res = await _dio.get('/jobs/created-by/$userId');
+    return (res.data as List).map((j) => Job.fromJson(j)).toList();
+  }
+
+  /// Gets all applications for a specific job (employer view).
+  Future<List<JobApplication>> getApplicationsByJob(int jobId) async {
+    // Backend has findByJobId in the repository — call the general applications
+    // endpoint and filter, since there's no dedicated /jobs/{id}/applications route.
+    // We fetch all pages and filter by jobId.
+    final List<JobApplication> results = [];
+    int page = 0;
+    while (true) {
+      final res = await _dio.get('/application', queryParameters: {'page': page, 'size': 50});
+      final data = res.data;
+      final content = data['content'] ?? data;
+      final apps = (content as List).map((j) => JobApplication.fromJson(j)).toList();
+      results.addAll(apps.where((a) => a.jobId == jobId));
+      final totalPages = data['totalPages'] ?? 1;
+      if (page >= totalPages - 1 || apps.isEmpty) break;
+      page++;
+    }
+    return results;
+  }
+
+  /// Creates a job.
+  /// - Automatically injects `createdByUserId` (profileId) from secure storage.
+  /// - Remaps `jobType` → `job_type` (backend DTO is snake_case).
+  /// - Accepts optional `latitude` and `longitude` to enable distance-based feed.
   Future<Job> createJob(Map<String, dynamic> job) async {
-    // Remap Flutter camelCase keys to the backend snake_case field names that
-    // AddJobRequestDto expects, and inject the mandatory createdByUserId.
     final payload = Map<String, dynamic>.from(job);
 
-    // jobType → job_type  (backend field is snake_case)
+    // jobType → job_type
     if (payload.containsKey('jobType') && !payload.containsKey('job_type')) {
       payload['job_type'] = payload.remove('jobType');
     }
 
-    // Inject the logged-in user's profile ID if not already supplied.
-    // The backend requires @NotNull createdByUserId — omitting it causes a
-    // 400 "Validation failed: {createdByUserId=User ID cannot be null}" error.
+    // Inject createdByUserId — required by backend @NotNull validation
     if (!payload.containsKey('createdByUserId') || payload['createdByUserId'] == null) {
       final profileId = await getProfileId();
-      if (profileId != null) {
-        payload['createdByUserId'] = profileId;
-      }
+      if (profileId != null) payload['createdByUserId'] = profileId;
     }
 
     final res = await _dio.post('/jobs', data: payload);
@@ -228,6 +229,18 @@ class ApiService {
 
   Future<void> deleteJob(int id) async {
     await _dio.delete('/jobs/$id');
+  }
+
+  // ── JOB SKILLS ────────────────────────────────────────
+  /// Links a skill to a job via POST /jobs/{jobId}/skills/{skillId}.
+  /// AddJobRequestDto has no skillIds field — skills must be attached separately.
+  Future<Job> addSkillToJob(int jobId, int skillId) async {
+    final res = await _dio.post('/jobs/$jobId/skills/$skillId');
+    return Job.fromJson(res.data);
+  }
+
+  Future<void> removeSkillFromJob(int jobId, int skillId) async {
+    await _dio.delete('/jobs/$jobId/skills/$skillId');
   }
 
   // ── APPLICATIONS ──────────────────────────────────────
@@ -274,9 +287,7 @@ class ApiService {
 
   Future<List<Job>> getCombinedFeed(int userId, {double maxDistanceKm = 50, int page = 0, int size = 10}) async {
     final res = await _dio.get('/feed/$userId', queryParameters: {
-      'maxDistanceKm': maxDistanceKm,
-      'page': page,
-      'size': size,
+      'maxDistanceKm': maxDistanceKm, 'page': page, 'size': size,
     });
     return (res.data as List).map((j) => Job.fromJson(j)).toList();
   }

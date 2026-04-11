@@ -50,14 +50,9 @@ class _JobDetailScreenState extends State<JobDetailScreen>
   Future<void> _submitApplication() async {
     setState(() => _applying = true);
 
-    // userId here is the User (profile) entity ID — NOT the AppUser ID.
-    // The backend AddApplicationDto.userId maps to the User table.
+    // Resolve userId — try in-memory first, then storage
     final authProvider = context.read<AuthProvider>();
-    int? userId = authProvider.currentUserId;
-
-    // Fallback: read from secure storage (covers cases where the provider
-    // hasn't been initialised yet in this session, e.g. after a cold start).
-    userId ??= await apiService.getProfileId();
+    int? userId = authProvider.currentUserId ?? await apiService.getProfileId();
 
     if (userId == null) {
       setState(() => _applying = false);
@@ -72,29 +67,26 @@ class _JobDetailScreenState extends State<JobDetailScreen>
 
     try {
       await apiService.createApplication(widget.job.id, userId,
-          coverLetter: _coverLetterCtrl.text.trim().isNotEmpty
-              ? _coverLetterCtrl.text.trim()
+          coverLetter: _coverLetterCtrl.text.isNotEmpty
+              ? _coverLetterCtrl.text
               : null);
+      setState(() {
+        _applying = false;
+        _applied = true;
+      });
       if (mounted) {
-        Navigator.pop(context); // close the bottom sheet
-        setState(() {
-          _applying = false;
-          _applied = true;
-        });
+        Navigator.pop(context); // close bottom sheet
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Application submitted! 🎉'),
             backgroundColor: AppTheme.green,
             behavior: SnackBarBehavior.floating));
       }
     } catch (e) {
+      setState(() => _applying = false);
       if (mounted) {
-        Navigator.pop(context); // close bottom sheet so snackbar is visible
-        setState(() => _applying = false);
+        // FIX: Parse the error properly instead of dumping the raw exception.
         final msg = _parseApplicationError(e);
-        // If already applied, mark the button as applied so user doesn't retry
-        if (msg.contains('already applied')) {
-          setState(() => _applied = true);
-        }
+        Navigator.pop(context); // close bottom sheet so user can see snackbar
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(msg),
             backgroundColor: AppTheme.rose,
@@ -306,13 +298,38 @@ class _JobDetailScreenState extends State<JobDetailScreen>
           decoration: const BoxDecoration(
               color: AppTheme.bgCard,
               border: Border(top: BorderSide(color: AppTheme.bgMuted, width: 1))),
-          child: BrutalButton(
-            label: _applied ? '✓ Applied' : 'Apply Now',
-            onPressed: _applied ? null : _applyNow,
-            isLoading: _applying,
-            color: _applied ? AppTheme.green : AppTheme.accent,
-            width: double.infinity,
-          ),
+          child: Builder(builder: (context) {
+            final auth = context.watch<AuthProvider>();
+            final isOwner = widget.job.createdById != null &&
+                widget.job.createdById == auth.currentUserId;
+            if (isOwner) {
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  color: AppTheme.teal.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                      color: AppTheme.teal.withOpacity(0.3), width: 1),
+                ),
+                child: const Center(
+                  child: Text('You posted this job',
+                      style: TextStyle(
+                          fontFamily: 'SpaceGrotesk',
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          color: AppTheme.teal)),
+                ),
+              );
+            }
+            return BrutalButton(
+              label: _applied ? '✓ Applied' : 'Apply Now',
+              onPressed: _applied ? null : _applyNow,
+              isLoading: _applying,
+              color: _applied ? AppTheme.green : AppTheme.accent,
+              width: double.infinity,
+            );
+          }),
         ),
       ])),
     );

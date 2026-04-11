@@ -6,7 +6,7 @@ import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_provider.dart';
 import '../../models/models.dart';
-import '../../widgets/brutal_widgets.dart';
+import '../../widgets/brutal_widgets.dart'; 
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -19,6 +19,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _loading = true;
   File? _pickedImage;
   bool _uploadingPhoto = false;
+  List<Job> _myJobs = [];
+  bool _loadingJobs = false;
+  // applicants per job: jobId → list
+  Map<int, List<JobApplication>> _applicantsMap = {};
+  Map<int, bool> _loadingApplicants = {};
+  int? _expandedJobId;
 
   late AnimationController _headerCtrl;
   late AnimationController _floatCtrl;
@@ -62,6 +68,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       });
       auth.setCurrentUser(profile);
       _headerCtrl.forward();
+      _loadMyJobs(userId);
     } catch (_) {
       setState(() {
         _loading = false;
@@ -78,6 +85,53 @@ class _ProfileScreenState extends State<ProfileScreen>
             ]);
       });
       _headerCtrl.forward();
+      _loadMyJobs(userId);
+    }
+  }
+
+  Future<void> _loadMyJobs(int userId) async {
+    setState(() => _loadingJobs = true);
+    try {
+      final jobs = await apiService.getMyJobs(userId);
+      if (mounted) setState(() { _myJobs = jobs; _loadingJobs = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loadingJobs = false);
+    }
+  }
+
+  Future<void> _loadApplicants(int jobId) async {
+    setState(() => _loadingApplicants[jobId] = true);
+    try {
+      final apps = await apiService.getApplicationsByJob(jobId);
+      if (mounted) setState(() {
+        _applicantsMap[jobId] = apps;
+        _loadingApplicants[jobId] = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loadingApplicants[jobId] = false);
+    }
+  }
+
+  Future<void> _updateApplicationStatus(JobApplication app, String status) async {
+    try {
+      await apiService.updateApplicationStatus(app.id, status);
+      // Refresh applicants for this job
+      _loadApplicants(app.jobId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Status updated to $status'),
+          backgroundColor: AppTheme.green,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Failed to update status'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
     }
   }
 
@@ -248,6 +302,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 SliverToBoxAdapter(child: _buildHeader()),
                 SliverToBoxAdapter(child: _buildStats()),
                 SliverToBoxAdapter(child: _buildSkills()),
+                SliverToBoxAdapter(child: _buildMyJobs()),
                 SliverToBoxAdapter(child: _buildActions()),
                 const SliverToBoxAdapter(child: SizedBox(height: 40)),
               ]),
@@ -487,6 +542,177 @@ class _ProfileScreenState extends State<ProfileScreen>
                       .map((s) =>
                           SkillChip(label: s.name, onDelete: () => _removeSkill(s)))
                       .toList()),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildMyJobs() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Container(
+        decoration: AppTheme.cardDecoration(),
+        padding: const EdgeInsets.all(20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('My Posted Jobs',
+                style: TextStyle(
+                    fontFamily: 'SpaceGrotesk',
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: AppTheme.text)),
+            const Spacer(),
+            if (_myJobs.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('${_myJobs.length}',
+                    style: const TextStyle(
+                        fontFamily: 'SpaceGrotesk',
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                        color: AppTheme.accent)),
+              ),
+          ]),
+          const SizedBox(height: 14),
+          if (_loadingJobs)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: CircularProgressIndicator(
+                        color: AppTheme.accent, strokeWidth: 2)))
+          else if (_myJobs.isEmpty)
+            const Center(
+                child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text("You haven't posted any jobs yet.",
+                        style: TextStyle(
+                            fontFamily: 'SpaceGrotesk',
+                            fontSize: 13,
+                            color: AppTheme.textFaint))))
+          else
+            ...(_myJobs.map((job) {
+              final isExpanded = _expandedJobId == job.id;
+              final applicants = _applicantsMap[job.id] ?? [];
+              final isLoadingApps = _loadingApplicants[job.id] == true;
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: AppTheme.bgElevated,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                      color: isExpanded
+                          ? AppTheme.accent.withOpacity(0.4)
+                          : AppTheme.bgMuted,
+                      width: 1),
+                ),
+                child: Column(children: [
+                  // Job row — tap to toggle applicants
+                  GestureDetector(
+                    onTap: () {
+                      final newId = isExpanded ? null : job.id;
+                      setState(() => _expandedJobId = newId);
+                      if (newId != null && !_applicantsMap.containsKey(job.id)) {
+                        _loadApplicants(job.id);
+                      }
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(children: [
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text(job.title,
+                                  style: const TextStyle(
+                                      fontFamily: 'SpaceGrotesk',
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
+                                      color: AppTheme.text)),
+                              const SizedBox(height: 4),
+                              Row(children: [
+                                const Icon(Icons.location_on_outlined,
+                                    size: 11, color: AppTheme.textFaint),
+                                const SizedBox(width: 3),
+                                Text(job.location,
+                                    style: const TextStyle(
+                                        fontFamily: 'SpaceGrotesk',
+                                        fontSize: 12,
+                                        color: AppTheme.textMuted)),
+                                const SizedBox(width: 10),
+                                const Icon(Icons.currency_rupee,
+                                    size: 11, color: AppTheme.accent),
+                                Text('${(job.salary / 1000).round()}K',
+                                    style: const TextStyle(
+                                        fontFamily: 'SpaceGrotesk',
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 12,
+                                        color: AppTheme.accent)),
+                              ]),
+                            ])),
+                        JobTypeBadge(type: job.jobType),
+                        const SizedBox(width: 8),
+                        Icon(
+                          isExpanded
+                              ? Icons.keyboard_arrow_up_rounded
+                              : Icons.people_outline_rounded,
+                          size: 18,
+                          color: isExpanded ? AppTheme.accent : AppTheme.textFaint,
+                        ),
+                      ]),
+                    ),
+                  ),
+                  // Applicants panel
+                  if (isExpanded) ...[
+                    const Divider(height: 1, color: AppTheme.bgMuted),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              const Icon(Icons.people_rounded,
+                                  size: 14, color: AppTheme.accent),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Applicants${applicants.isNotEmpty ? ' (${applicants.length})' : ''}',
+                                style: const TextStyle(
+                                    fontFamily: 'SpaceGrotesk',
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                    color: AppTheme.accent),
+                              ),
+                            ]),
+                            const SizedBox(height: 10),
+                            if (isLoadingApps)
+                              const Center(
+                                  child: Padding(
+                                      padding: EdgeInsets.all(8),
+                                      child: CircularProgressIndicator(
+                                          color: AppTheme.accent,
+                                          strokeWidth: 2)))
+                            else if (applicants.isEmpty)
+                              const Text('No applicants yet.',
+                                  style: TextStyle(
+                                      fontFamily: 'SpaceGrotesk',
+                                      fontSize: 12,
+                                      color: AppTheme.textFaint))
+                            else
+                              ...applicants.map((app) => _ApplicantRow(
+                                    app: app,
+                                    onUpdateStatus: (status) =>
+                                        _updateApplicationStatus(app, status),
+                                  )),
+                          ]),
+                    ),
+                  ],
+                ]),
+              );
+            })),
         ]),
       ),
     );
@@ -1195,6 +1421,114 @@ class _ActionRow extends StatelessWidget {
           ]),
         ),
       );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// APPLICANT ROW — shown inside each posted job, employer-only
+// ═══════════════════════════════════════════════════════════════
+class _ApplicantRow extends StatelessWidget {
+  final JobApplication app;
+  final void Function(String status) onUpdateStatus;
+  const _ApplicantRow({required this.app, required this.onUpdateStatus});
+
+  static const _statuses = ['PENDING', 'SHORTLISTED', 'HIRED', 'REJECTED'];
+
+  Color _statusColor(String s) {
+    switch (s.toUpperCase()) {
+      case 'SHORTLISTED': return AppTheme.amber;
+      case 'HIRED':       return AppTheme.green;
+      case 'REJECTED':    return AppTheme.rose;
+      default:            return AppTheme.textMuted;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.bg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.bgMuted, width: 1),
+      ),
+      child: Row(children: [
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: AppTheme.accent.withOpacity(0.10),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.person_outline_rounded,
+              size: 16, color: AppTheme.accent),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              'Applicant #${app.id}',
+              style: const TextStyle(
+                  fontFamily: 'SpaceGrotesk',
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  color: AppTheme.text),
+            ),
+            if (app.appliedAt != null)
+              Text(
+                'Applied ${app.appliedAt!.split('T').first}',
+                style: const TextStyle(
+                    fontFamily: 'SpaceGrotesk',
+                    fontSize: 11,
+                    color: AppTheme.textFaint),
+              ),
+          ]),
+        ),
+        // Status dropdown — employer taps to change
+        PopupMenuButton<String>(
+          initialValue: app.status,
+          color: AppTheme.bgCard,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          onSelected: onUpdateStatus,
+          itemBuilder: (_) => _statuses
+              .map((s) => PopupMenuItem<String>(
+                    value: s,
+                    child: Text(
+                      s,
+                      style: TextStyle(
+                          fontFamily: 'SpaceGrotesk',
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: _statusColor(s)),
+                    ),
+                  ))
+              .toList(),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: _statusColor(app.status).withOpacity(0.12),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                  color: _statusColor(app.status).withOpacity(0.4), width: 1),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(
+                app.status,
+                style: TextStyle(
+                    fontFamily: 'SpaceGrotesk',
+                    fontWeight: FontWeight.w700,
+                    fontSize: 10,
+                    color: _statusColor(app.status)),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.arrow_drop_down_rounded,
+                  size: 14, color: _statusColor(app.status)),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 
 class _AddSkillSheet extends StatefulWidget {

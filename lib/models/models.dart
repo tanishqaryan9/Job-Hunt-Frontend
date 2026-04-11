@@ -166,6 +166,7 @@ class Job {
   final double salary;
   final String jobType;
   final String? createdByName;
+  final int? createdById;
   final double? latitude;
   final double? longitude;
   final List<Skill> skills;
@@ -180,6 +181,7 @@ class Job {
     required this.salary,
     required this.jobType,
     this.createdByName,
+    this.createdById,
     this.latitude,
     this.longitude,
     this.skills = const [],
@@ -196,6 +198,7 @@ class Job {
         // Backend sends "jobType" (via @JsonProperty) — fallback to legacy keys
         jobType: json['jobType'] ?? json['job_type'] ?? 'FULL_TIME',
         createdByName: json['createdBy']?['name'],
+        createdById: (json['createdBy'] as Map<String, dynamic>?)?['id'] as int?,
         latitude: json['latitude']?.toDouble(),
         longitude: json['longitude']?.toDouble(),
         // Backend sends "skills" (via @JsonProperty on requiredSkills)
