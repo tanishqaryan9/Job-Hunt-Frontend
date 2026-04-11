@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
 class SplashScreen extends StatefulWidget {
-  final VoidCallback onComplete;
-  const SplashScreen({super.key, required this.onComplete});
+  final VoidCallback? onComplete;
+  const SplashScreen({super.key, this.onComplete});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -76,7 +76,7 @@ class _SplashScreenState extends State<SplashScreen>
     await Future.delayed(const Duration(milliseconds: 2600));
     _exitController.forward();
     await Future.delayed(const Duration(milliseconds: 600));
-    widget.onComplete();
+    widget.onComplete?.call();
   }
 
   @override
@@ -131,8 +131,8 @@ class _SplashScreenState extends State<SplashScreen>
                           alignment: Alignment.center,
                           children: [
                             // Outer orbit ring
-                            _OrbitRing(radius: 105, opacity: 0.12),
-                            _OrbitRing(radius: 78,  opacity: 0.08),
+                            const _OrbitRing(radius: 105, opacity: 0.12),
+                            const _OrbitRing(radius: 78,  opacity: 0.08),
 
                             // Outer orbit — 3 dots, clockwise
                             _OrbitingDot(
@@ -206,7 +206,7 @@ class _SplashScreenState extends State<SplashScreen>
                               ),
                             ),
                             const SizedBox(height: 8),
-                            Text(
+                            const Text(
                               'YOUR CAREER. ELEVATED.',
                               style: TextStyle(
                                 fontFamily: 'SpaceGrotesk',

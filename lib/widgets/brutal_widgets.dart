@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
@@ -367,7 +366,7 @@ class BrutalError extends StatelessWidget {
     child: Padding(
       padding: const EdgeInsets.all(24),
       child: BrutalCard(
-        color: AppTheme.rose.withOpacity(0.1) as Color,
+        color: AppTheme.rose.withOpacity(0.1),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [

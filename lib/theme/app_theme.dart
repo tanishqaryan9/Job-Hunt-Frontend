@@ -74,7 +74,7 @@ class AppTheme {
     BoxShadow(color: accent.withOpacity(0.06), blurRadius: 40, offset: const Offset(0, 0)),
   ];
 
-  static List<BoxShadow> accentShadow() => [
+  static List<BoxShadow> accentShadow({double? opacity}) => [
     BoxShadow(color: accent.withOpacity(0.35), blurRadius: 20, spreadRadius: -4, offset: const Offset(0, 8)),
   ];
 
@@ -103,7 +103,6 @@ class AppTheme {
     useMaterial3: true,
     brightness: Brightness.dark,
     colorScheme: const ColorScheme.dark(
-      background: bg,
       surface: bgCard,
       primary: accent,
       onPrimary: white,
@@ -111,7 +110,6 @@ class AppTheme {
       onSecondary: white,
       tertiary: amber,
       error: rose,
-      onBackground: text,
       onSurface: text,
     ),
     scaffoldBackgroundColor: bg,

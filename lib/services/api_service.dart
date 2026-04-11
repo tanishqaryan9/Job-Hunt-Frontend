@@ -4,17 +4,20 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/models.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://10.0.2.2:8081'; // Android emulator → host
-  // For iOS simulator / web use: 'http://localhost:8081'
+
+  // Production backend (Render.com – has cold-start delays up to ~30s)
+  static const String _prodUrl = 'https://job-posting-u2lr.onrender.com';
+
   static const _storage = FlutterSecureStorage();
 
   late final Dio _dio;
 
   ApiService() {
     _dio = Dio(BaseOptions(
-      baseUrl: baseUrl,
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 30),
+      baseUrl: _prodUrl,
+      connectTimeout: const Duration(seconds: 60),
+      receiveTimeout: const Duration(seconds: 60),
+      sendTimeout: const Duration(seconds: 60),
       headers: {'Content-Type': 'application/json'},
     ));
 
@@ -60,11 +63,16 @@ class ApiService {
   Future<void> _saveTokens(AuthResponse auth) async {
     await _storage.write(key: 'access_token', value: auth.accessToken);
     await _storage.write(key: 'refresh_token', value: auth.refreshToken);
-    // Store profileId (User table ID) used in /users/{id} endpoints
     if (auth.profileId != null) {
       await _storage.write(key: 'profile_id', value: auth.profileId.toString());
     }
+    if (auth.appUserId != null) {
+      await _storage.write(key: 'app_user_id', value: auth.appUserId.toString());
+    }
   }
+
+  /// Saves tokens obtained externally (e.g. via OAuth2 redirect) without a POST call.
+  Future<void> saveTokensDirectly(AuthResponse auth) => _saveTokens(auth);
 
   Future<void> clearTokens() async {
     await _storage.deleteAll();
@@ -72,8 +80,14 @@ class ApiService {
 
   Future<String?> getAccessToken() => _storage.read(key: 'access_token');
   Future<String?> getRefreshToken() => _storage.read(key: 'refresh_token');
+
   Future<int?> getProfileId() async {
     final val = await _storage.read(key: 'profile_id');
+    return val != null ? int.tryParse(val) : null;
+  }
+
+  Future<int?> getAppUserId() async {
+    final val = await _storage.read(key: 'app_user_id');
     return val != null ? int.tryParse(val) : null;
   }
 
@@ -155,6 +169,16 @@ class ApiService {
     return UserProfile.fromJson(res.data);
   }
 
+  // ── JOB SKILLS ────────────────────────────────────────
+  Future<Job> addSkillToJob(int jobId, int skillId) async {
+    final res = await _dio.post('/jobs/$jobId/skills/$skillId');
+    return Job.fromJson(res.data);
+  }
+
+  Future<void> removeSkillFromJob(int jobId, int skillId) async {
+    await _dio.delete('/jobs/$jobId/skills/$skillId');
+  }
+
   // ── JOBS ──────────────────────────────────────────────
   Future<PageResponse<Job>> getJobs({int page = 0, int size = 10}) async {
     final res = await _dio.get('/jobs', queryParameters: {'page': page, 'size': size});
@@ -174,7 +198,26 @@ class ApiService {
   }
 
   Future<Job> createJob(Map<String, dynamic> job) async {
-    final res = await _dio.post('/jobs', data: job);
+    // Remap Flutter camelCase keys to the backend snake_case field names that
+    // AddJobRequestDto expects, and inject the mandatory createdByUserId.
+    final payload = Map<String, dynamic>.from(job);
+
+    // jobType → job_type  (backend field is snake_case)
+    if (payload.containsKey('jobType') && !payload.containsKey('job_type')) {
+      payload['job_type'] = payload.remove('jobType');
+    }
+
+    // Inject the logged-in user's profile ID if not already supplied.
+    // The backend requires @NotNull createdByUserId — omitting it causes a
+    // 400 "Validation failed: {createdByUserId=User ID cannot be null}" error.
+    if (!payload.containsKey('createdByUserId') || payload['createdByUserId'] == null) {
+      final profileId = await getProfileId();
+      if (profileId != null) {
+        payload['createdByUserId'] = profileId;
+      }
+    }
+
+    final res = await _dio.post('/jobs', data: payload);
     return Job.fromJson(res.data);
   }
 

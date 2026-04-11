@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import '../../theme/app_theme.dart';
 import '../../services/auth_provider.dart';
 import '../../widgets/brutal_widgets.dart';
@@ -15,6 +16,9 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _showPassword = false;
+  bool _oauthLoading = false;
+  // FIX: Show a "server waking up" hint when a request is taking long
+  bool _showWakeUpHint = false;
 
   late AnimationController _slideCtrl;
   late AnimationController _floatCtrl;
@@ -22,11 +26,16 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   late Animation<double> _floatAnim;
   late Animation<double> _fadeAnim;
 
+  // Production backend URL
+  static const String _backendUrl = 'https://job-posting-u2lr.onrender.com';
+  static const String _callbackScheme = 'posting';
+
   @override
   void initState() {
     super.initState();
     _slideCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
-    _floatCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 3000))..repeat(reverse: true);
+    _floatCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 3000))
+      ..repeat(reverse: true);
     _slideAnim = Tween<Offset>(begin: const Offset(0, 0.3), end: Offset.zero)
         .animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOut));
     _fadeAnim = Tween<double>(begin: 0, end: 1)
@@ -37,27 +46,127 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   }
 
   @override
-  void dispose() { _slideCtrl.dispose(); _floatCtrl.dispose(); _usernameCtrl.dispose(); _passwordCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _slideCtrl.dispose();
+    _floatCtrl.dispose();
+    _usernameCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
     final auth = context.read<AuthProvider>();
+
+    // FIX: Show "server waking up" hint after 5 seconds if still loading
+    final wakeUpTimer = Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
+    });
+
     final ok = await auth.login(_usernameCtrl.text.trim(), _passwordCtrl.text);
+    if (mounted) setState(() => _showWakeUpHint = false);
+
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(auth.error ?? 'Login failed'),
-        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating,
+        backgroundColor: AppTheme.rose,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
       ));
+    }
+    await wakeUpTimer;
+  }
+
+  /// Opens the backend OAuth2 flow in a browser using flutter_web_auth_2.
+  /// Spring Boot authenticates with the provider, then redirects back to
+  /// posting://oauth2callback?accessToken=...&refreshToken=...&profileId=...&appUserId=...
+  Future<void> _oauthLogin(String provider) async {
+    setState(() { _oauthLoading = true; _showWakeUpHint = false; });
+
+    // FIX: Show wake-up hint after 5s for OAuth too (server cold start)
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && _oauthLoading) setState(() => _showWakeUpHint = true);
+    });
+
+    try {
+      final authUrl = '$_backendUrl/oauth2/authorization/$provider';
+
+      final result = await FlutterWebAuth2.authenticate(
+        url: authUrl,
+        callbackUrlScheme: _callbackScheme,
+      );
+
+      if (!mounted) return;
+      setState(() => _showWakeUpHint = false);
+
+      // Parse all params from the redirect URL
+      final uri = Uri.parse(result);
+      final accessToken = uri.queryParameters['accessToken'];
+      final refreshToken = uri.queryParameters['refreshToken'];
+
+      // FIX: Check for error param first — backend may redirect with ?error=...
+      final errorParam = uri.queryParameters['error'];
+      if (errorParam != null && errorParam.isNotEmpty) {
+        throw Exception('OAuth error: $errorParam');
+      }
+
+      if (accessToken == null || accessToken.isEmpty ||
+          refreshToken == null || refreshToken.isEmpty) {
+        throw Exception('No tokens received from OAuth2 flow');
+      }
+      final profileIdStr = uri.queryParameters['profileId'];
+      final appUserIdStr = uri.queryParameters['appUserId'];
+      final profileId = profileIdStr != null && profileIdStr.isNotEmpty
+          ? int.tryParse(profileIdStr)
+          : null;
+      final appUserId = appUserIdStr != null && appUserIdStr.isNotEmpty
+          ? int.tryParse(appUserIdStr)
+          : null;
+
+      if (!mounted) return;
+      final auth = context.read<AuthProvider>();
+      final ok = await auth.loginWithOAuthTokens(
+        accessToken,
+        refreshToken,
+        profileId: profileId,
+        appUserId: appUserId,
+      );
+
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(auth.error ?? 'OAuth login failed'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 6),
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _showWakeUpHint = false);
+      final msg = e.toString().contains('CANCELED') || e.toString().contains('canceled')
+          ? 'Sign-in cancelled'
+          : e.toString().contains('OAuth error')
+              ? 'OAuth login failed: ${e.toString().replaceAll('Exception: OAuth error: ', '')}'
+              : 'OAuth login failed. Please try again.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor: AppTheme.rose,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+      ));
+    } finally {
+      if (mounted) setState(() { _oauthLoading = false; _showWakeUpHint = false; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final busy = auth.isLoading || _oauthLoading;
+
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: Stack(children: [
-        // Ambient glow
         Positioned(top: -120, left: -80,
           child: Container(width: 360, height: 360,
             decoration: BoxDecoration(shape: BoxShape.circle,
@@ -72,7 +181,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
             padding: const EdgeInsets.symmetric(horizontal: 28),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const SizedBox(height: 48),
-              // Floating icon
               AnimatedBuilder(
                 animation: _floatAnim,
                 builder: (_, __) => Transform.translate(
@@ -96,57 +204,95 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     const Text('Welcome\nback.', style: TextStyle(
                       fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
-                      fontSize: 42, height: 1.05, letterSpacing: -2, color: AppTheme.text,
-                    )),
+                      fontSize: 42, height: 1.05, letterSpacing: -2, color: AppTheme.text)),
                     const SizedBox(height: 8),
                     const Text('Sign in to continue your journey', style: TextStyle(
-                      fontFamily: 'SpaceGrotesk', fontSize: 15, color: AppTheme.textMuted,
-                    )),
+                      fontFamily: 'SpaceGrotesk', fontSize: 15, color: AppTheme.textMuted)),
                     const SizedBox(height: 40),
+
+                    // FIX: Server wake-up banner
+                    if (_showWakeUpHint) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        margin: const EdgeInsets.only(bottom: 16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.teal.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppTheme.teal.withOpacity(0.3), width: 1),
+                        ),
+                        child: const Row(children: [
+                          SizedBox(
+                            width: 16, height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppTheme.teal),
+                          ),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Server is waking up… this may take ~30 seconds on first use.',
+                              style: TextStyle(
+                                fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    ],
+
                     Form(key: _formKey, child: Column(children: [
-                      BrutalTextField(label: 'Username', controller: _usernameCtrl,
+                      BrutalTextField(
+                        label: 'Username', controller: _usernameCtrl,
                         prefixIcon: const Icon(Icons.person_outline),
                         validator: (v) => v!.isEmpty ? 'Enter username' : null),
                       const SizedBox(height: 16),
-                      BrutalTextField(label: 'Password', controller: _passwordCtrl,
+                      BrutalTextField(
+                        label: 'Password', controller: _passwordCtrl,
                         obscureText: !_showPassword,
                         prefixIcon: const Icon(Icons.lock_outline),
                         suffixIcon: IconButton(
-                          icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                          icon: Icon(_showPassword
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined),
                           onPressed: () => setState(() => _showPassword = !_showPassword),
                         ),
                         validator: (v) => v!.isEmpty ? 'Enter password' : null),
                       const SizedBox(height: 28),
-                      BrutalButton(label: 'SIGN IN', onPressed: _login,
+                      BrutalButton(
+                        label: 'SIGN IN', onPressed: busy ? null : _login,
                         isLoading: auth.isLoading, width: double.infinity),
                       const SizedBox(height: 20),
-                      Row(children: [
+                      const Row(children: [
                         Expanded(child: Divider(color: AppTheme.bgMuted)),
-                        Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Text('or', style: TextStyle(fontFamily: 'SpaceGrotesk',
-                            fontSize: 13, color: AppTheme.textFaint))),
+                        Padding(padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: Text('or', style: TextStyle(
+                            fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textFaint))),
                         Expanded(child: Divider(color: AppTheme.bgMuted)),
                       ]),
                       const SizedBox(height: 20),
+
+                      // ── Google OAuth2 ──────────────────────────────────
                       _OAuthButton(
                         label: 'Continue with Google',
-                        color: const Color(0xFF1E2333),
                         icon: _GoogleIcon(),
-                        onTap: () {},
+                        loading: _oauthLoading,
+                        onTap: busy ? null : () => _oauthLogin('google'),
                       ),
                       const SizedBox(height: 12),
+
+                      // ── GitHub OAuth2 ──────────────────────────────────
                       _OAuthButton(
                         label: 'Continue with GitHub',
-                        color: const Color(0xFF1E2333),
                         icon: const Icon(Icons.code_rounded, size: 20, color: Colors.white),
-                        onTap: () {},
+                        loading: _oauthLoading,
+                        onTap: busy ? null : () => _oauthLogin('github'),
                       ),
                       const SizedBox(height: 36),
                       Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                         const Text("Don't have an account? ", style: TextStyle(
                           fontFamily: 'SpaceGrotesk', fontSize: 14, color: AppTheme.textMuted)),
                         GestureDetector(
-                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SignupScreen())),
+                          onTap: () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => const SignupScreen())),
                           child: const Text('Sign Up', style: TextStyle(
                             fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
                             fontSize: 14, color: AppTheme.accent)),
@@ -167,28 +313,37 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
 
 class _OAuthButton extends StatelessWidget {
   final String label;
-  final Color color;
   final Widget icon;
-  final VoidCallback onTap;
-  const _OAuthButton({required this.label, required this.color, required this.icon, required this.onTap});
+  final VoidCallback? onTap;
+  final bool loading;
+  const _OAuthButton({required this.label, required this.icon, this.onTap, this.loading = false});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
     onTap: onTap,
-    child: Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 15),
-      decoration: BoxDecoration(
-        color: AppTheme.bgElevated,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.bgMuted, width: 1),
+    child: AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: onTap == null ? 0.5 : 1.0,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        decoration: BoxDecoration(
+          color: AppTheme.bgElevated,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppTheme.bgMuted, width: 1),
+        ),
+        child: loading
+            ? const Center(child: SizedBox(
+                width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent)))
+            : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                SizedBox(width: 20, height: 20, child: icon),
+                const SizedBox(width: 12),
+                Text(label, style: const TextStyle(
+                  fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600,
+                  fontSize: 14, color: AppTheme.text)),
+              ]),
       ),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        SizedBox(width: 20, height: 20, child: icon),
-        const SizedBox(width: 12),
-        Text(label, style: const TextStyle(fontFamily: 'SpaceGrotesk',
-          fontWeight: FontWeight.w600, fontSize: 14, color: AppTheme.text)),
-      ]),
     ),
   );
 }
@@ -197,7 +352,10 @@ class _GoogleIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     width: 20, height: 20,
-    decoration: BoxDecoration(color: const Color(0xFF4285F4), borderRadius: BorderRadius.circular(4)),
-    child: const Center(child: Text('G', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
+    decoration: BoxDecoration(
+      color: const Color(0xFF4285F4),
+      borderRadius: BorderRadius.circular(4)),
+    child: const Center(child: Text('G',
+      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12))),
   );
 }

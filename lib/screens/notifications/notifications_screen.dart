@@ -162,7 +162,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   Widget _buildShimmer() => ListView.builder(
     padding: const EdgeInsets.symmetric(horizontal: 24),
     itemCount: 5,
-    itemBuilder: (_, i) => Padding(padding: const EdgeInsets.only(bottom: 12), child: BrutalShimmer(height: 80)),
+    itemBuilder: (_, i) => const Padding(padding: EdgeInsets.only(bottom: 12), child: BrutalShimmer(height: 80)),
   );
 
   Widget _buildList() => RefreshIndicator(

@@ -135,7 +135,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
         Expanded(
           child: _loading
               ? ListView.builder(padding: const EdgeInsets.all(24), itemCount: 4,
-                  itemBuilder: (_, i) => Padding(padding: const EdgeInsets.only(bottom: 14),
+                  itemBuilder: (_, i) => const Padding(padding: EdgeInsets.only(bottom: 14),
                     child: BrutalShimmer(height: 110)))
               : _filtered.isEmpty
                   ? _buildEmpty()
@@ -208,7 +208,7 @@ class _SummaryDot extends StatelessWidget {
   Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
     Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
     const SizedBox(width: 6),
-    Text('$count $label', style: TextStyle(fontFamily: 'SpaceGrotesk',
+    Text('$count $label', style: const TextStyle(fontFamily: 'SpaceGrotesk',
       fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textMuted)),
   ]);
 }
@@ -304,10 +304,10 @@ class _ApplicationCardState extends State<_ApplicationCard> {
                 firstChild: const SizedBox.shrink(),
                 secondChild: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const SizedBox(height: 16),
-                  Divider(color: AppTheme.bgMuted),
+                  const Divider(color: AppTheme.bgMuted),
                   const SizedBox(height: 12),
                   if (widget.app.coverLetter != null) ...[
-                    Text('Cover Letter', style: TextStyle(fontFamily: 'SpaceGrotesk',
+                    const Text('Cover Letter', style: TextStyle(fontFamily: 'SpaceGrotesk',
                       fontWeight: FontWeight.w700, fontSize: 11,
                       letterSpacing: 0.5, color: AppTheme.textMuted)),
                     const SizedBox(height: 6),

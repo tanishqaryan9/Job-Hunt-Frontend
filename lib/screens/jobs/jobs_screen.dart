@@ -4,6 +4,7 @@ import '../../services/api_service.dart';
 import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 import 'job_detail_screen.dart';
+import 'create_job_screen.dart';
 
 class JobsScreen extends StatefulWidget {
   const JobsScreen({super.key});
@@ -36,20 +37,26 @@ class _JobsScreenState extends State<JobsScreen> {
     try {
       final result = await apiService.getJobs(page: _page, size: 10);
       setState(() {
-        if (reset) _jobs = result.content; else _jobs.addAll(result.content);
+        if (reset) {
+          _jobs = result.content;
+        } else {
+          _jobs.addAll(result.content);
+        }
         _hasMore = result.page < result.totalPages - 1;
         _loading = false;
       });
     } catch (e) {
       setState(() {
         _loading = false;
-        if (_jobs.isEmpty) _jobs = [
+        if (_jobs.isEmpty) {
+          _jobs = [
           Job(id: 1, title: 'Senior Flutter Developer', description: 'Build cross-platform apps', location: 'Bangalore', salary: 120000, jobType: 'FULL_TIME', createdByName: 'TechCorp India', skills: [Skill(id: 1, name: 'Flutter'), Skill(id: 2, name: 'Dart')]),
           Job(id: 2, title: 'Backend Engineer', description: 'Spring Boot microservices', location: 'Mumbai', salary: 95000, jobType: 'FULL_TIME', createdByName: 'FinTech Startup'),
           Job(id: 3, title: 'React Developer', description: 'Build responsive web apps', location: 'Delhi', salary: 85000, jobType: 'CONTRACT', createdByName: 'WebStudio'),
           Job(id: 4, title: 'Data Scientist', description: 'ML model development', location: 'Hyderabad', salary: 110000, jobType: 'FULL_TIME', createdByName: 'AI Labs'),
           Job(id: 5, title: 'DevOps Engineer', description: 'Kubernetes and AWS', location: 'Pune', salary: 100000, jobType: 'PART_TIME', createdByName: 'CloudTech'),
         ];
+        }
       });
     }
   }
@@ -66,16 +73,40 @@ class _JobsScreenState extends State<JobsScreen> {
     return ms && mt;
   }).toList();
 
+  void _openCreateJob() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const CreateJobScreen()),
+    );
+    if (created == true) _loadJobs();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bg,
+      // FIX: Moved FAB out of bottomNavigationBar slot (which caused a render error)
+      // and into the proper floatingActionButton property, positioned bottom-right.
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openCreateJob,
+        backgroundColor: AppTheme.accent,
+        foregroundColor: Colors.white,
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        tooltip: 'Post a Job',
+        child: const Icon(Icons.add_rounded, size: 28),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: SafeArea(child: Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('All Jobs', style: TextStyle(fontFamily: 'SpaceGrotesk',
-              fontWeight: FontWeight.w700, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
+            const Row(children: [
+              Expanded(
+                child: Text('All Jobs', style: TextStyle(fontFamily: 'SpaceGrotesk',
+                  fontWeight: FontWeight.w700, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
+              ),
+            ]),
             const SizedBox(height: 16),
             // Search
             Container(
@@ -116,18 +147,20 @@ class _JobsScreenState extends State<JobsScreen> {
           child: _loading
               ? ListView.builder(padding: const EdgeInsets.symmetric(horizontal: 24),
                   itemCount: 5,
-                  itemBuilder: (_, i) => Padding(padding: const EdgeInsets.only(bottom: 12), child: BrutalShimmer(height: 100)))
+                  itemBuilder: (_, i) => const Padding(padding: EdgeInsets.only(bottom: 12), child: BrutalShimmer(height: 100)))
               : RefreshIndicator(
                   onRefresh: () => _loadJobs(),
                   color: AppTheme.accent, backgroundColor: AppTheme.bgCard,
                   child: ListView.builder(
                     controller: _scrollCtrl,
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 80), // bottom padding for FAB
                     itemCount: _filtered.length + (_hasMore ? 1 : 0),
                     itemBuilder: (_, i) {
-                      if (i == _filtered.length) return const Center(child: Padding(
+                      if (i == _filtered.length) {
+                        return const Center(child: Padding(
                         padding: EdgeInsets.all(16),
                         child: CircularProgressIndicator(color: AppTheme.accent, strokeWidth: 2)));
+                      }
                       final job = _filtered[i];
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
@@ -183,9 +216,9 @@ class _JobListItem extends StatelessWidget {
         Container(
           width: 5,
           height: 80,
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             gradient: AppTheme.accentGradient,
-            borderRadius: const BorderRadius.horizontal(left: Radius.circular(20)),
+            borderRadius: BorderRadius.horizontal(left: Radius.circular(20)),
           ),
         ),
         Expanded(
@@ -201,12 +234,12 @@ class _JobListItem extends StatelessWidget {
               ],
               const SizedBox(height: 8),
               Row(children: [
-                Icon(Icons.location_on_outlined, size: 12, color: AppTheme.textFaint),
+                const Icon(Icons.location_on_outlined, size: 12, color: AppTheme.textFaint),
                 const SizedBox(width: 3),
                 Text(job.location, style: const TextStyle(fontFamily: 'SpaceGrotesk',
                   fontSize: 12, color: AppTheme.textMuted)),
                 const SizedBox(width: 14),
-                Icon(Icons.currency_rupee, size: 12, color: AppTheme.accent),
+                const Icon(Icons.currency_rupee, size: 12, color: AppTheme.accent),
                 Text('${(job.salary / 1000).round()}K', style: const TextStyle(
                   fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
                   fontSize: 12, color: AppTheme.accent)),

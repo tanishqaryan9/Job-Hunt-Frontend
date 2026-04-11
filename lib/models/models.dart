@@ -61,6 +61,24 @@ class AuthResponse {
         appUserId: json['appUserId'] as int?,
         profileId: json['profileId'] as int?,
       );
+
+  // BUG FIX: Added profileId and appUserId parameters.
+  // The backend's OAuth2SuccessHandler encodes both IDs into the deep-link URL
+  // (posting://oauth2callback?accessToken=...&refreshToken=...&profileId=...&appUserId=...).
+  // Previously these were accepted but ignored, leaving both IDs null after OAuth2
+  // login and breaking every screen that calls /users/{id}, /feed/{id}, etc.
+  factory AuthResponse.fromTokens({
+    required String accessToken,
+    required String refreshToken,
+    int? profileId,
+    int? appUserId,
+  }) =>
+      AuthResponse(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        profileId: profileId,
+        appUserId: appUserId,
+      );
 }
 
 class UserProfile {

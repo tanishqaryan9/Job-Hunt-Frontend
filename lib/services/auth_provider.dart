@@ -7,25 +7,40 @@ enum AuthStatus { unknown, authenticated, unauthenticated }
 class AuthProvider extends ChangeNotifier {
   AuthStatus _status = AuthStatus.unknown;
   UserProfile? _currentUser;
-  int? _currentUserId;   // User-profile ID (User table) used in /users/{id} endpoints
-  int? _appUserId;       // AppUser ID (login account), stored for reference
+  int? _currentUserId;
+  int? _appUserId;
   String? _error;
   bool _isLoading = false;
 
   AuthStatus get status => _status;
   UserProfile? get currentUser => _currentUser;
-  int? get currentUserId => _currentUserId;   // used everywhere: feed, notifications, profile
+  int? get currentUserId => _currentUserId;
   int? get appUserId => _appUserId;
   String? get error => _error;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
 
+  Future<void> tryRestoreSession() async {
+    _isLoading = true;
+    notifyListeners();
+    final token = await apiService.getAccessToken();
+    if (token != null) {
+      _currentUserId = await apiService.getProfileId();
+      _appUserId = await apiService.getAppUserId();
+      _status = AuthStatus.authenticated;
+    } else {
+      _status = AuthStatus.unauthenticated;
+    }
+    _isLoading = false;
+    notifyListeners();
+  }
+
   Future<void> checkAuthStatus() async {
     final token = await apiService.getAccessToken();
     if (token != null) {
       _status = AuthStatus.authenticated;
-      // Restore stored profileId so screens work after app restart
       _currentUserId = await apiService.getProfileId();
+      _appUserId = await apiService.getAppUserId();
     } else {
       _status = AuthStatus.unauthenticated;
     }
@@ -44,7 +59,7 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _error = _parseError(e);
+      _error = _parseError(e, isLogin: true);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -56,18 +71,59 @@ class AuthProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      // api_service.signup() registers then immediately logs in, returning full AuthResponse
       final auth = await apiService.signup(req);
       _applyAuthResponse(auth);
       _isLoading = false;
       notifyListeners();
       return true;
     } catch (e) {
-      _error = _parseError(e);
+      _error = _parseError(e, isLogin: false);
       _isLoading = false;
       notifyListeners();
       return false;
     }
+  }
+
+  Future<bool> loginWithOAuthTokens(
+    String accessToken,
+    String refreshToken, {
+    int? profileId,
+    int? appUserId,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      final auth = AuthResponse.fromTokens(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        profileId: profileId,
+        appUserId: appUserId,
+      );
+      await apiService.saveTokensDirectly(auth);
+      _applyAuthResponse(auth);
+      if (_currentUserId == null) {
+        await _fetchAndSetUserId();
+      }
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _error = 'OAuth login failed. Please try again.';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> _fetchAndSetUserId() async {
+    try {
+      final profileId = await apiService.getProfileId();
+      if (profileId != null) {
+        _currentUserId = profileId;
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   Future<void> logout() async {
@@ -91,14 +147,98 @@ class AuthProvider extends ChangeNotifier {
   void _applyAuthResponse(AuthResponse auth) {
     _status = AuthStatus.authenticated;
     _appUserId = auth.appUserId;
-    _currentUserId = auth.profileId;  // profileId is the User table PK used across the API
+    _currentUserId = auth.profileId;
   }
 
-  String _parseError(dynamic e) {
+  /// Converts Dio/HTTP errors into human-readable messages.
+  /// [isLogin] = true for login, false for signup — changes 404/400 wording.
+  String _parseError(dynamic e, {bool isLogin = true}) {
     final s = e.toString();
-    if (s.contains('401')) return 'Invalid credentials';
-    if (s.contains('409')) return 'Username already exists';
-    if (s.contains('SocketException')) return 'No internet connection';
+
+    // ── Try to read the backend JSON error body first ──────────────
+    try {
+      final dynamic response = (e as dynamic).response?.data;
+      final int? statusCode = (e as dynamic).response?.statusCode;
+
+      if (response != null) {
+        final msg = response['message']?.toString()
+            ?? response['error']?.toString()
+            ?? response['detail']?.toString();
+
+        if (msg != null && msg.isNotEmpty) {
+          // Validation failed (Spring @Valid errors)
+          if (msg.contains('Validation failed') || msg.contains('validation')) {
+            final match = RegExp(r'\{(.+?)\}').firstMatch(msg);
+            if (match != null) {
+              final inner = match.group(1) ?? '';
+              final fieldMsg = inner.split('=').last.trim();
+              return fieldMsg.isNotEmpty
+                  ? fieldMsg
+                  : 'Please check your inputs and try again.';
+            }
+            return 'Please check your inputs and try again.';
+          }
+
+          // Already-taken username
+          if (msg.toLowerCase().contains('already exists') ||
+              msg.toLowerCase().contains('already taken')) {
+            return 'That username is already taken. Try a different one.';
+          }
+
+          // User not found (404 from backend)
+          if (statusCode == 404 ||
+              msg.toLowerCase().contains('not found') ||
+              msg.toLowerCase().contains('no user') ||
+              msg.toLowerCase().contains('user not found')) {
+            return isLogin
+                ? 'Account not found. Check your username or sign up.'
+                : 'Could not find your account. Please try again.';
+          }
+
+          // Bad credentials
+          if (statusCode == 401 ||
+              msg.toLowerCase().contains('bad credentials') ||
+              msg.toLowerCase().contains('invalid credentials') ||
+              msg.toLowerCase().contains('unauthorized')) {
+            return 'Incorrect username or password. Please try again.';
+          }
+
+          return msg;
+        }
+
+        // No message field — use status code alone
+        if (statusCode == 404) {
+          return isLogin
+              ? 'Account not found. Check your username or sign up.'
+              : 'Registration failed — please try a different username.';
+        }
+        if (statusCode == 401) return 'Incorrect username or password.';
+        if (statusCode == 409) return 'That username is already taken.';
+        if (statusCode == 400) return 'Please check your inputs and try again.';
+        if (statusCode == 500) return 'Server error — please try again shortly.';
+      }
+    } catch (_) {}
+
+    // ── Fallback: inspect the stringified exception ────────────────
+    if (s.contains('404')) {
+      return isLogin
+          ? 'Account not found. Check your username or sign up.'
+          : 'Registration failed — user not found after signup.';
+    }
+    if (s.contains('401')) return 'Incorrect username or password.';
+    if (s.contains('409')) return 'That username is already taken.';
+    if (s.contains('400')) return 'Please check your inputs and try again.';
+    if (s.contains('SocketException') ||
+        s.contains('Connection refused') ||
+        s.contains('Network is unreachable')) {
+      return 'Cannot connect to server. Check your internet connection.';
+    }
+    if (s.contains('timeout') ||
+        s.contains('TimeoutException') ||
+        s.contains('DioException')) {
+      return 'Server is waking up — please wait a moment and try again.\n'
+          '(Free servers sleep after inactivity)';
+    }
     return 'Something went wrong. Please try again.';
   }
 

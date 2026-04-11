@@ -1,29 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:posting/screens/auth/login_screen.dart';
 import 'package:provider/provider.dart';
-import 'theme/app_theme.dart';
 import 'services/auth_provider.dart';
+import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
+import 'screens/auth/login_screen.dart';
 import 'screens/main_shell.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
-
-  // Status bar style
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    systemNavigationBarColor: AppTheme.white,
-    systemNavigationBarIconBrightness: Brightness.dark,
-  ));
-
-  runApp(const PostingApp());
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => AuthProvider(),
+      child: const PostingApp(),
+    ),
+  );
 }
 
 class PostingApp extends StatelessWidget {
@@ -31,58 +21,59 @@ class PostingApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => AuthProvider()),
-      ],
-      child: MaterialApp(
-        title: 'Posting — Job Board',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.theme,
-        home: const AppRoot(),
-      ),
+    return MaterialApp(
+      title: 'Posting',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.theme,
+      home: const _RootRouter(),
     );
   }
 }
 
-class AppRoot extends StatefulWidget {
-  const AppRoot({super.key});
+class _RootRouter extends StatefulWidget {
+  const _RootRouter();
 
   @override
-  State<AppRoot> createState() => _AppRootState();
+  State<_RootRouter> createState() => _RootRouterState();
 }
 
-class _AppRootState extends State<AppRoot> {
-  bool _showSplash = true;
+class _RootRouterState extends State<_RootRouter> {
+  // Starts false — splash shows first.
+  // Flips to true only AFTER tryRestoreSession() fully completes.
+  bool _initialized = false;
+
+  // Called by SplashScreen when its animation finishes.
+  // Async work is done here in the State so we fully control
+  // when setState fires — avoids the VoidCallback async race condition.
+  void _onSplashComplete() {
+    context.read<AuthProvider>().tryRestoreSession().then((_) {
+      if (mounted) setState(() => _initialized = true);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (_showSplash) {
-      return SplashScreen(
-        onComplete: () async {
-          // Check auth status after splash
-          await context.read<AuthProvider>().checkAuthStatus();
-          if (mounted) setState(() => _showSplash = false);
-        },
+    // Step 1 — show splash until session restore finishes
+    if (!_initialized) {
+      return SplashScreen(onComplete: _onSplashComplete);
+    }
+
+    final auth = context.watch<AuthProvider>();
+
+    // Step 2 — safety spinner (should be nearly instant after step 1)
+    if (auth.status == AuthStatus.unknown || auth.isLoading) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF0D0F1A),
+        body: Center(
+          child: CircularProgressIndicator(
+            color: Color(0xFF6C63FF),
+            strokeWidth: 2,
+          ),
+        ),
       );
     }
 
-    return Consumer<AuthProvider>(
-      builder: (_, auth, __) {
-        switch (auth.status) {
-          case AuthStatus.unknown:
-            return const Scaffold(
-              backgroundColor: AppTheme.white,
-              body: Center(
-                child: CircularProgressIndicator(color: AppTheme.primary),
-              ),
-            );
-          case AuthStatus.authenticated:
-            return const MainShell();
-          case AuthStatus.unauthenticated:
-            return const LoginScreen();
-        }
-      },
-    );
+    // Step 3 — route based on auth result
+    return auth.isAuthenticated ? const MainShell() : const LoginScreen();
   }
 }

@@ -29,27 +29,42 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
     super.initState();
     _navCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
     _navCtrl.forward();
-    _loadUnreadCount();
     _initUser();
   }
 
+  /// FIX: _initUser now ensures currentUserId is set before screens render.
+  /// Previously, if profileId was null (OAuth2 login without ID in redirect),
+  /// the feed would immediately fail with "userId == null" and show nothing.
+  /// Now we load from storage first, then fetch the full profile.
   Future<void> _initUser() async {
     final auth = context.read<AuthProvider>();
     try {
-      // Load the current user's own profile using the profileId stored at login
-      final profileId = auth.currentUserId ?? await apiService.getProfileId();
+      // Prefer the in-memory value, fall back to secure storage
+      int? profileId = auth.currentUserId ?? await apiService.getProfileId();
+
       if (profileId != null) {
         final profile = await apiService.getUserById(profileId);
-        auth.setCurrentUser(profile);
+        if (mounted) {
+          auth.setCurrentUser(profile);
+          // Now load unread count — userId is guaranteed to be set
+          _loadUnreadCount();
+        }
+      } else {
+        // userId truly unavailable — still try to load notifications gracefully
+        _loadUnreadCount();
       }
-    } catch (_) {}
+    } catch (_) {
+      // Don't crash the shell — just try unread count anyway
+      _loadUnreadCount();
+    }
   }
 
   Future<void> _loadUnreadCount() async {
     try {
       final auth = context.read<AuthProvider>();
-      if (auth.currentUserId != null) {
-        final count = await apiService.getUnreadCount(auth.currentUserId!);
+      final userId = auth.currentUserId ?? await apiService.getProfileId();
+      if (userId != null && mounted) {
+        final count = await apiService.getUnreadCount(userId);
         if (mounted) setState(() => _unreadCount = count);
       }
     } catch (_) {}

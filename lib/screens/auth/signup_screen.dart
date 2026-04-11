@@ -20,6 +20,8 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   final _experienceCtrl = TextEditingController(text: '0');
   bool _showPassword = false;
   int _step = 0;
+  // FIX: Show server wake-up hint when request takes > 5s
+  bool _showWakeUpHint = false;
 
   late AnimationController _stepCtrl;
   late Animation<double> _stepFade;
@@ -35,7 +37,9 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   @override
   void dispose() {
     _stepCtrl.dispose();
-    for (final c in [_usernameCtrl, _passwordCtrl, _nameCtrl, _numberCtrl, _locationCtrl, _experienceCtrl]) c.dispose();
+    for (final c in [_usernameCtrl, _passwordCtrl, _nameCtrl, _numberCtrl, _locationCtrl, _experienceCtrl]) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -45,21 +49,34 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   }
 
   Future<void> _submit() async {
-  if (!_formKey.currentState!.validate()) return;
-  final auth = context.read<AuthProvider>();
-  final signupReq = SignupRequest(
-    username: _usernameCtrl.text.trim(),
-    password: _passwordCtrl.text,
-    name: _nameCtrl.text.trim(),
-    number: _numberCtrl.text.trim(),
-    location: _locationCtrl.text.trim(),
-    experience: int.tryParse(_experienceCtrl.text) ?? 0,
-  );
-  final ok = await auth.signup(signupReq);
-  if (!ok && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text(auth.error ?? 'Sign up failed'),
-    backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
-}
+    if (!_formKey.currentState!.validate()) return;
+    final auth = context.read<AuthProvider>();
+
+    // FIX: Show server wake-up hint after 5 seconds if still loading
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
+    });
+
+    final signupReq = SignupRequest(
+      username: _usernameCtrl.text.trim(),
+      password: _passwordCtrl.text,
+      name: _nameCtrl.text.trim(),
+      number: _numberCtrl.text.trim(),
+      location: _locationCtrl.text.trim(),
+      experience: int.tryParse(_experienceCtrl.text) ?? 0,
+    );
+    final ok = await auth.signup(signupReq);
+    if (mounted) setState(() => _showWakeUpHint = false);
+
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(auth.error ?? 'Sign up failed'),
+        backgroundColor: AppTheme.rose,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+      ));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,7 +149,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       suffixIcon: IconButton(
         icon: Icon(_showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
         onPressed: () => setState(() => _showPassword = !_showPassword)),
-      validator: (v) => v!.length < 6 ? 'Min 6 characters' : null),
+      validator: (v) => v!.length < 8 ? 'Password must be at least 8 characters' : null),
     const SizedBox(height: 32),
     BrutalButton(label: 'Continue', onPressed: _nextStep, width: double.infinity,
       icon: const Icon(Icons.arrow_forward_rounded, size: 18, color: Colors.white)),
@@ -170,7 +187,11 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     const SizedBox(height: 16),
     BrutalTextField(label: 'Phone Number', controller: _numberCtrl,
       keyboardType: TextInputType.phone, prefixIcon: const Icon(Icons.phone_outlined),
-      validator: (v) => v!.isEmpty ? 'Enter phone' : null),
+      validator: (v) {
+          if (v == null || v.isEmpty) return 'Enter phone number';
+          if (!RegExp(r'^[0-9]{10}$').hasMatch(v)) return 'Enter a valid 10-digit number';
+          return null;
+        }),
     const SizedBox(height: 16),
     BrutalTextField(label: 'Location', controller: _locationCtrl,
       prefixIcon: const Icon(Icons.location_on_outlined),
@@ -178,8 +199,35 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     const SizedBox(height: 16),
     BrutalTextField(label: 'Years of Experience', controller: _experienceCtrl,
       keyboardType: TextInputType.number, prefixIcon: const Icon(Icons.work_outline)),
-    const SizedBox(height: 32),
-    BrutalButton(label: 'Create Account', onPressed: _submit,
+    const SizedBox(height: 16),
+
+    // FIX: Server wake-up banner shown during signup submission
+    if (_showWakeUpHint)
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: AppTheme.teal.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.teal.withOpacity(0.3), width: 1),
+        ),
+        child: const Row(children: [
+          SizedBox(
+            width: 16, height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal),
+          ),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Server is waking up… please wait ~30 seconds.',
+              style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal),
+            ),
+          ),
+        ]),
+      ),
+
+    BrutalButton(label: 'Create Account', onPressed: auth.isLoading ? null : _submit,
       isLoading: auth.isLoading, width: double.infinity),
     const SizedBox(height: 32),
   ]);
