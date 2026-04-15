@@ -1,10 +1,23 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
+import '../../services/auth_provider.dart';
 import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 import 'job_detail_screen.dart';
 import 'create_job_screen.dart';
+
+double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
+  const r = 6371.0;
+  final dLat = (lat2 - lat1) * math.pi / 180;
+  final dLon = (lon2 - lon1) * math.pi / 180;
+  final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(lat1 * math.pi / 180) * math.cos(lat2 * math.pi / 180) *
+          math.sin(dLon / 2) * math.sin(dLon / 2);
+  return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+}
 
 class JobsScreen extends StatefulWidget {
   const JobsScreen({super.key});
@@ -19,6 +32,7 @@ class _JobsScreenState extends State<JobsScreen> {
   String _search = '';
   String? _filterType;
   final _scrollCtrl = ScrollController();
+  double? _userLat, _userLon;
 
   @override
   void initState() {
@@ -34,30 +48,35 @@ class _JobsScreenState extends State<JobsScreen> {
 
   Future<void> _loadJobs({bool reset = true}) async {
     if (reset) setState(() { _loading = true; _page = 0; _hasMore = true; });
+
+    // Grab user lat/lon from AuthProvider (set during feed load / signup)
+    final auth = context.read<AuthProvider>();
+    final user = auth.currentUser;
+    _userLat = user?.latitude;
+    _userLon = user?.longitude;
+
     try {
       final result = await apiService.getJobs(page: _page, size: 10);
+      // Compute distances client-side
+      final jobs = result.content;
+      if (_userLat != null && _userLon != null) {
+        for (final job in jobs) {
+          if (job.latitude != null && job.longitude != null) {
+            job.distanceKm = _haversineKm(_userLat!, _userLon!, job.latitude!, job.longitude!);
+          }
+        }
+      }
       setState(() {
         if (reset) {
-          _jobs = result.content;
+          _jobs = jobs;
         } else {
-          _jobs.addAll(result.content);
+          _jobs.addAll(jobs);
         }
         _hasMore = result.page < result.totalPages - 1;
         _loading = false;
       });
     } catch (e) {
-      setState(() {
-        _loading = false;
-        if (_jobs.isEmpty) {
-          _jobs = [
-          Job(id: 1, title: 'Senior Flutter Developer', description: 'Build cross-platform apps', location: 'Bangalore', salary: 120000, jobType: 'FULL_TIME', createdByName: 'TechCorp India', skills: [Skill(id: 1, name: 'Flutter'), Skill(id: 2, name: 'Dart')]),
-          Job(id: 2, title: 'Backend Engineer', description: 'Spring Boot microservices', location: 'Mumbai', salary: 95000, jobType: 'FULL_TIME', createdByName: 'FinTech Startup'),
-          Job(id: 3, title: 'React Developer', description: 'Build responsive web apps', location: 'Delhi', salary: 85000, jobType: 'CONTRACT', createdByName: 'WebStudio'),
-          Job(id: 4, title: 'Data Scientist', description: 'ML model development', location: 'Hyderabad', salary: 110000, jobType: 'FULL_TIME', createdByName: 'AI Labs'),
-          Job(id: 5, title: 'DevOps Engineer', description: 'Kubernetes and AWS', location: 'Pune', salary: 100000, jobType: 'PART_TIME', createdByName: 'CloudTech'),
-        ];
-        }
-      });
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -85,8 +104,6 @@ class _JobsScreenState extends State<JobsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bg,
-      // FIX: Moved FAB out of bottomNavigationBar slot (which caused a render error)
-      // and into the proper floatingActionButton property, positioned bottom-right.
       floatingActionButton: FloatingActionButton(
         onPressed: _openCreateJob,
         backgroundColor: AppTheme.accent,
@@ -108,7 +125,6 @@ class _JobsScreenState extends State<JobsScreen> {
               ),
             ]),
             const SizedBox(height: 16),
-            // Search
             Container(
               decoration: BoxDecoration(color: AppTheme.bgElevated,
                 borderRadius: BorderRadius.circular(14),
@@ -153,19 +169,21 @@ class _JobsScreenState extends State<JobsScreen> {
                   color: AppTheme.accent, backgroundColor: AppTheme.bgCard,
                   child: ListView.builder(
                     controller: _scrollCtrl,
-                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 80), // bottom padding for FAB
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 80),
                     itemCount: _filtered.length + (_hasMore ? 1 : 0),
                     itemBuilder: (_, i) {
                       if (i == _filtered.length) {
                         return const Center(child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: CircularProgressIndicator(color: AppTheme.accent, strokeWidth: 2)));
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(color: AppTheme.accent, strokeWidth: 2)));
                       }
                       final job = _filtered[i];
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
-                        child: _JobListItem(job: job,
-                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => JobDetailScreen(job: job)))),
+                        child: _JobListItem(
+                          job: job,
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => JobDetailScreen(job: job))),
+                        ),
                       );
                     },
                   ),
@@ -215,7 +233,6 @@ class _JobListItem extends StatelessWidget {
         // Left accent gradient bar
         Container(
           width: 5,
-          height: 80,
           decoration: const BoxDecoration(
             gradient: AppTheme.accentGradient,
             borderRadius: BorderRadius.horizontal(left: Radius.circular(20)),
@@ -233,16 +250,30 @@ class _JobListItem extends StatelessWidget {
                   fontSize: 12, color: AppTheme.textMuted)),
               ],
               const SizedBox(height: 8),
-              Row(children: [
-                const Icon(Icons.location_on_outlined, size: 12, color: AppTheme.textFaint),
-                const SizedBox(width: 3),
-                Text(job.location, style: const TextStyle(fontFamily: 'SpaceGrotesk',
-                  fontSize: 12, color: AppTheme.textMuted)),
-                const SizedBox(width: 14),
-                const Icon(Icons.currency_rupee, size: 12, color: AppTheme.accent),
-                Text('${(job.salary / 1000).round()}K', style: const TextStyle(
-                  fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
-                  fontSize: 12, color: AppTheme.accent)),
+              Wrap(spacing: 12, runSpacing: 4, children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.location_on_outlined, size: 12, color: AppTheme.textFaint),
+                  const SizedBox(width: 3),
+                  Text(job.location, style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                    fontSize: 12, color: AppTheme.textMuted)),
+                ]),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.currency_rupee, size: 12, color: AppTheme.accent),
+                  Text(job.salaryDisplay, style: const TextStyle(
+                    fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
+                    fontSize: 12, color: AppTheme.accent)),
+                ]),
+                // Distance chip — shown only when user coords and job coords available
+                if (job.distanceKm != null)
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.near_me_outlined, size: 12, color: AppTheme.teal),
+                    const SizedBox(width: 3),
+                    Text(
+                      job.distanceKm! < 1 ? '< 1 km' : '${job.distanceKm!.round()} km',
+                      style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                        fontWeight: FontWeight.w600, fontSize: 12, color: AppTheme.teal),
+                    ),
+                  ]),
               ]),
             ]),
           ),

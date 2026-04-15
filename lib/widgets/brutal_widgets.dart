@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import 'package:flutter/services.dart';
 
 // ── PRIMARY BUTTON ────────────────────────────────────────────
 class BrutalButton extends StatefulWidget {
@@ -131,6 +132,7 @@ class BrutalTextField extends StatelessWidget {
   final int maxLines;
   final String? hint;
   final void Function(String)? onChanged;
+  final List<TextInputFormatter>? inputFormatters;
 
   const BrutalTextField({
     super.key,
@@ -144,6 +146,7 @@ class BrutalTextField extends StatelessWidget {
     this.maxLines = 1,
     this.hint,
     this.onChanged,
+    this.inputFormatters,
   });
 
   @override
@@ -152,6 +155,7 @@ class BrutalTextField extends StatelessWidget {
       controller: controller,
       obscureText: obscureText,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       validator: validator,
       maxLines: maxLines,
       onChanged: onChanged,

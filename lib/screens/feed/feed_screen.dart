@@ -1,11 +1,79 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_provider.dart';
 import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 import '../jobs/job_detail_screen.dart';
+
+// ── Haversine distance ──────────────────────────────────────────────────────
+double _haversineKm(double lat1, double lon1, double lat2, double lon2) {
+  const r = 6371.0;
+  final dLat = _rad(lat2 - lat1);
+  final dLon = _rad(lon2 - lon1);
+  final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(_rad(lat1)) * math.cos(_rad(lat2)) *
+          math.sin(dLon / 2) * math.sin(dLon / 2);
+  return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+}
+
+double _rad(double deg) => deg * math.pi / 180;
+
+// Salary period options for the salary filter tab
+enum _SalaryPeriod { hour, day, month, year }
+
+extension _SalaryPeriodExt on _SalaryPeriod {
+  String get label {
+    switch (this) {
+      case _SalaryPeriod.hour:  return 'Per Hour';
+      case _SalaryPeriod.day:   return 'Per Day';
+      case _SalaryPeriod.month: return 'Per Month';
+      case _SalaryPeriod.year:  return 'Per Year';
+    }
+  }
+  String get short {
+    switch (this) {
+      case _SalaryPeriod.hour:  return '/hr';
+      case _SalaryPeriod.day:   return '/day';
+      case _SalaryPeriod.month: return '/mo';
+      case _SalaryPeriod.year:  return '/yr';
+    }
+  }
+  // Default slider range per period
+  double get defaultMin {
+    switch (this) {
+      case _SalaryPeriod.hour:  return 50;
+      case _SalaryPeriod.day:   return 200;
+      case _SalaryPeriod.month: return 5000;
+      case _SalaryPeriod.year:  return 60000;
+    }
+  }
+  double get defaultMax {
+    switch (this) {
+      case _SalaryPeriod.hour:  return 2000;
+      case _SalaryPeriod.day:   return 5000;
+      case _SalaryPeriod.month: return 150000;
+      case _SalaryPeriod.year:  return 2000000;
+    }
+  }
+  double get sliderMax {
+    switch (this) {
+      case _SalaryPeriod.hour:  return 5000;
+      case _SalaryPeriod.day:   return 20000;
+      case _SalaryPeriod.month: return 500000;
+      case _SalaryPeriod.year:  return 5000000;
+    }
+  }
+  String formatValue(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
+    if (v >= 100000)   return '${(v / 100000).toStringAsFixed(1)}L';
+    if (v >= 1000)     return '${(v / 1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}K';
+    return v.round().toString();
+  }
+}
 
 class FeedScreen extends StatefulWidget {
   const FeedScreen({super.key});
@@ -17,17 +85,51 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
   List<Job> _nearestJobs = [], _skillMatchJobs = [], _salaryJobs = [];
   bool _loading = true;
   String? _error;
-  double _minSalary = 100, _maxSalary = 150000;
+
+  // Salary filter
+  _SalaryPeriod _salaryPeriod = _SalaryPeriod.month;
+  late double _minSalary, _maxSalary;
+
+  // Device GPS coords
+  double? _deviceLat, _deviceLon;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _minSalary = _salaryPeriod.defaultMin;
+    _maxSalary = _salaryPeriod.defaultMax;
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadFeed());
   }
 
   @override
   void dispose() { _tabController.dispose(); super.dispose(); }
+
+  Future<void> _fetchLocation(int userId) async {
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.deniedForever) return;
+      final pos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.medium,
+          timeLimit: const Duration(seconds: 8));
+      _deviceLat = pos.latitude;
+      _deviceLon = pos.longitude;
+      await apiService.updateUserLocation(userId, pos.latitude, pos.longitude);
+    } catch (_) {}
+  }
+
+  /// Attach Haversine distances to every job that has coordinates
+  void _attachDistances(List<Job> jobs) {
+    if (_deviceLat == null || _deviceLon == null) return;
+    for (final job in jobs) {
+      if (job.latitude != null && job.longitude != null) {
+        job.distanceKm = _haversineKm(_deviceLat!, _deviceLon!, job.latitude!, job.longitude!);
+      }
+    }
+  }
 
   Future<void> _loadFeed() async {
     setState(() { _loading = true; _error = null; });
@@ -35,12 +137,9 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
       final auth = context.read<AuthProvider>();
       int? userId = auth.currentUserId;
 
-      // FIX: If userId is still null (e.g. right after OAuth2 login where
-      // profileId wasn't in the redirect URL), try to load it from storage.
       if (userId == null) {
         userId = await apiService.getProfileId();
         if (userId != null) {
-          // Reload the user profile so AuthProvider has the full user object
           try {
             final profile = await apiService.getUserById(userId);
             auth.setCurrentUser(profile);
@@ -49,39 +148,65 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
       }
 
       if (userId == null) {
-        // FIX: Instead of showing "Not logged in" error (which is confusing when
-        // the user IS logged in but profileId wasn't synced yet), fall back to
-        // showing all jobs so the feed is never empty.
         final jobsResult = await apiService.getJobs(page: 0, size: 20);
         setState(() {
           _nearestJobs = jobsResult.content;
           _skillMatchJobs = jobsResult.content;
           _salaryJobs = jobsResult.content;
           _loading = false;
-          _error = null;
         });
         return;
       }
 
+      final locationFuture = _fetchLocation(userId);
+
       final results = await Future.wait([
-        apiService.getNearestJobs(userId, k: 10).catchError((_) => <Job>[]),
         apiService.getSkillMatchJobs(userId).catchError((_) => <Job>[]),
-        apiService.getJobsBySalary(_minSalary, _maxSalary).catchError((_) => <Job>[]),
+        apiService.getJobsBySalary(_minSalary, _maxSalary, userId: userId).catchError((_) => <Job>[]),
+        locationFuture.then((_) => <Job>[]).catchError((_) => <Job>[]),
       ]);
 
-      // FIX: If all feed endpoints return empty (e.g. user has no skills/location set),
-      // fall back to regular jobs list so the feed doesn't appear broken.
-      List<Job> nearest = results[0];
-      List<Job> skillMatch = results[1];
-      List<Job> salary = results[2];
+      List<Job> skillMatch = results[0];
+      List<Job> salary = results[1];
+
+      List<Job> nearest = [];
+      try {
+        final allJobsPage = await apiService.getJobs(page: 0, size: 50);
+        final allJobs = allJobsPage.content
+            .where((j) => j.createdById != userId)
+            .toList();
+
+        if (_deviceLat != null && _deviceLon != null) {
+          for (final job in allJobs) {
+            if (job.latitude != null && job.longitude != null) {
+              job.distanceKm = _haversineKm(_deviceLat!, _deviceLon!, job.latitude!, job.longitude!);
+            }
+          }
+          allJobs.sort((a, b) {
+            final da = a.distanceKm ?? double.infinity;
+            final db = b.distanceKm ?? double.infinity;
+            return da.compareTo(db);
+          });
+          nearest = allJobs.take(10).toList();
+        } else {
+          nearest = await apiService.getNearestJobs(userId, k: 10).catchError((_) => allJobs.take(10).toList());
+        }
+      } catch (_) {
+        nearest = skillMatch.isNotEmpty ? skillMatch : salary;
+      }
 
       if (nearest.isEmpty && skillMatch.isEmpty) {
         try {
           final fallback = await apiService.getJobs(page: 0, size: 20);
-          nearest = nearest.isEmpty ? fallback.content : nearest;
-          skillMatch = skillMatch.isEmpty ? fallback.content : skillMatch;
+          final filtered = fallback.content.where((j) => j.createdById != userId).toList();
+          if (nearest.isEmpty) nearest = filtered;
+          if (skillMatch.isEmpty) skillMatch = filtered;
         } catch (_) {}
       }
+
+      // Attach distances to skill-match and salary lists too
+      _attachDistances(skillMatch);
+      _attachDistances(salary);
 
       setState(() {
         _nearestJobs = nearest;
@@ -90,28 +215,27 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
         _loading = false;
       });
     } catch (e) {
-      // FIX: On error, show demo jobs so the feed is never a blank screen
-      setState(() {
-        _error = null; // Don't show error — just show demo data
-        _nearestJobs = _skillMatchJobs = _salaryJobs = _demoJobs();
-        _loading = false;
-      });
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  List<Job> _demoJobs() => [
-    Job(id: 1, title: 'Senior Flutter Developer', description: 'Build amazing apps', location: 'Bangalore', salary: 120000, jobType: 'FULL_TIME', createdByName: 'TechCorp'),
-    Job(id: 2, title: 'Backend Engineer', description: 'Spring Boot microservices', location: 'Mumbai', salary: 95000, jobType: 'FULL_TIME', createdByName: 'StartupXYZ'),
-    Job(id: 3, title: 'UI/UX Designer', description: 'Design pixel-perfect interfaces', location: 'Delhi', salary: 75000, jobType: 'CONTRACT', createdByName: 'DesignStudio'),
-    Job(id: 4, title: 'Data Scientist', description: 'ML model development', location: 'Hyderabad', salary: 110000, jobType: 'FULL_TIME', createdByName: 'AI Labs'),
-  ];
+  Future<void> _reloadSalary() async {
+    try {
+      final auth = context.read<AuthProvider>();
+      final userId = auth.currentUserId ?? await apiService.getProfileId();
+      final salary = await apiService.getJobsBySalary(_minSalary, _maxSalary, userId: userId)
+          .catchError((_) => <Job>[]);
+      _attachDistances(salary);
+      if (mounted) setState(() => _salaryJobs = salary);
+    } catch (_) {}
+  }
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: SafeArea(child: Column(children: [
-        // Header
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -145,13 +269,12 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
             ),
           ]),
         ),
-        // Content
         Expanded(
           child: _loading
               ? _buildShimmer()
               : TabBarView(controller: _tabController, children: [
                   _buildJobList(_nearestJobs, showDistance: true),
-                  _buildJobList(_skillMatchJobs),
+                  _buildJobList(_skillMatchJobs, showDistance: true),
                   _buildSalaryTab(),
                 ]),
         ),
@@ -168,27 +291,18 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
   Widget _buildJobList(List<Job> jobs, {bool showDistance = false}) {
     if (jobs.isEmpty) {
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        const Icon(Icons.work_outline_rounded, size: 48, color: AppTheme.textFaint),
-        const SizedBox(height: 16),
-        const Text('No jobs found', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)),
-        const SizedBox(height: 8),
-        const Text('Complete your profile to get better matches',
-          style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.textFaint),
-          textAlign: TextAlign.center),
-        const SizedBox(height: 20),
-        GestureDetector(
-          onTap: _loadFeed,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            decoration: BoxDecoration(
-              gradient: AppTheme.accentGradient,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Text('Refresh', style: TextStyle(
-              fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
-              fontSize: 13, color: Colors.white)),
-          ),
+        Container(
+          width: 72, height: 72,
+          decoration: BoxDecoration(color: AppTheme.bgElevated, shape: BoxShape.circle,
+              border: Border.all(color: AppTheme.bgMuted, width: 1)),
+          child: const Icon(Icons.work_off_outlined, size: 32, color: AppTheme.textFaint),
         ),
+        const SizedBox(height: 16),
+        const Text('No jobs found', style: TextStyle(fontFamily: 'SpaceGrotesk',
+            fontWeight: FontWeight.w700, fontSize: 16, color: AppTheme.text)),
+        const SizedBox(height: 6),
+        const Text('Try refreshing or adjusting filters', style: TextStyle(
+            fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
       ]));
     }
     return RefreshIndicator(
@@ -223,25 +337,62 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
         padding: const EdgeInsets.all(20),
         decoration: AppTheme.cardDecoration(),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Period selector buttons
+          const Text('Pay Period', style: TextStyle(fontFamily: 'SpaceGrotesk',
+              fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.textMuted)),
+          const SizedBox(height: 10),
+          Row(children: _SalaryPeriod.values.map((p) {
+            final active = _salaryPeriod == p;
+            return Expanded(child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _salaryPeriod = p;
+                  _minSalary = p.defaultMin;
+                  _maxSalary = p.defaultMax;
+                });
+                _reloadSalary();
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                margin: EdgeInsets.only(right: p != _SalaryPeriod.year ? 8 : 0),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: active ? AppTheme.accent : AppTheme.bgElevated,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: active ? AppTheme.accent : AppTheme.bgMuted),
+                ),
+                child: Center(child: Text(
+                  p == _SalaryPeriod.hour ? 'Hour'
+                    : p == _SalaryPeriod.day ? 'Day'
+                    : p == _SalaryPeriod.month ? 'Month' : 'Year',
+                  style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
+                      fontSize: 11, color: active ? Colors.white : AppTheme.textMuted),
+                )),
+              ),
+            ));
+          }).toList()),
+          const SizedBox(height: 16),
+          // Range label
           Row(children: [
-            const Text('Salary Range', style: TextStyle(
+            Text('Salary Range', style: const TextStyle(
               fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
               fontSize: 14, color: AppTheme.text)),
             const Spacer(),
-            Text('₹${(_minSalary / 1000).round()}K — ₹${(_maxSalary / 1000).round()}K',
+            Text(
+              '₹${_salaryPeriod.formatValue(_minSalary)}${_salaryPeriod.short} — ₹${_salaryPeriod.formatValue(_maxSalary)}${_salaryPeriod.short}',
               style: const TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
-                fontSize: 14, color: AppTheme.accent)),
+                fontSize: 13, color: AppTheme.accent)),
           ]),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           RangeSlider(
             values: RangeValues(_minSalary, _maxSalary),
-            min: 100, max: 500000, divisions: 100,
+            min: 0, max: _salaryPeriod.sliderMax, divisions: 100,
             onChanged: (v) => setState(() { _minSalary = v.start; _maxSalary = v.end; }),
-            onChangeEnd: (_) => _loadFeed(),
+            onChangeEnd: (_) => _reloadSalary(),
           ),
         ]),
       ),
-      Expanded(child: _buildJobList(_salaryJobs)),
+      Expanded(child: _buildJobList(_salaryJobs, showDistance: true)),
     ]);
   }
 }
@@ -262,10 +413,16 @@ class _FeedJobCardState extends State<FeedJobCard> with SingleTickerProviderStat
   void initState() {
     super.initState();
     _pressCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 100));
+    _isSaved = apiService.isJobSaved(widget.job.id);
   }
 
   @override
   void dispose() { _pressCtrl.dispose(); super.dispose(); }
+
+  void _toggleSave() {
+    apiService.toggleSaveJob(widget.job);
+    setState(() => _isSaved = apiService.isJobSaved(widget.job.id));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -284,7 +441,6 @@ class _FeedJobCardState extends State<FeedJobCard> with SingleTickerProviderStat
               boxShadow: AppTheme.cardShadow(),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Top gradient accent
               Container(
                 height: 4,
                 decoration: const BoxDecoration(
@@ -296,7 +452,6 @@ class _FeedJobCardState extends State<FeedJobCard> with SingleTickerProviderStat
                 padding: const EdgeInsets.all(18),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Company avatar
                     Container(
                       width: 44, height: 44,
                       decoration: BoxDecoration(
@@ -319,7 +474,7 @@ class _FeedJobCardState extends State<FeedJobCard> with SingleTickerProviderStat
                         fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
                     ])),
                     GestureDetector(
-                      onTap: () => setState(() => _isSaved = !_isSaved),
+                      onTap: _toggleSave,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         width: 36, height: 36,
@@ -336,9 +491,15 @@ class _FeedJobCardState extends State<FeedJobCard> with SingleTickerProviderStat
                   const SizedBox(height: 14),
                   Wrap(spacing: 8, runSpacing: 8, children: [
                     _Chip(icon: Icons.location_on_outlined, text: widget.job.location),
-                    _Chip(icon: Icons.currency_rupee, text: '${(widget.job.salary / 1000).round()}K/mo', accent: true),
+                    _Chip(icon: Icons.currency_rupee, text: widget.job.salaryChip, accent: true),
                     if (widget.showDistance && widget.job.distanceKm != null)
-                      _Chip(icon: Icons.near_me_outlined, text: '${widget.job.distanceKm!.round()}km'),
+                      _Chip(
+                        icon: Icons.near_me_outlined,
+                        text: widget.job.distanceKm! < 1
+                            ? '< 1 km'
+                            : '${widget.job.distanceKm!.round()} km',
+                        teal: true,
+                      ),
                   ]),
                   const SizedBox(height: 12),
                   Row(children: [
@@ -364,21 +525,27 @@ class _Chip extends StatelessWidget {
   final IconData icon;
   final String text;
   final bool accent;
-  const _Chip({required this.icon, required this.text, this.accent = false});
+  final bool teal;
+  const _Chip({required this.icon, required this.text, this.accent = false, this.teal = false});
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-    decoration: BoxDecoration(
-      color: accent ? AppTheme.accent.withOpacity(0.1) : AppTheme.bgElevated,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: accent ? AppTheme.accent.withOpacity(0.3) : AppTheme.bgMuted, width: 1),
-    ),
-    child: Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(icon, size: 12, color: accent ? AppTheme.accent : AppTheme.textMuted),
-      const SizedBox(width: 4),
-      Text(text, style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600,
-        fontSize: 11, color: accent ? AppTheme.accent : AppTheme.textMuted)),
-    ]),
-  );
+  Widget build(BuildContext context) {
+    final color = teal ? AppTheme.teal : (accent ? AppTheme.accent : AppTheme.textMuted);
+    final bg = teal ? AppTheme.teal.withOpacity(0.1) : (accent ? AppTheme.accent.withOpacity(0.1) : AppTheme.bgElevated);
+    final border = teal ? AppTheme.teal.withOpacity(0.3) : (accent ? AppTheme.accent.withOpacity(0.3) : AppTheme.bgMuted);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: border, width: 1),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        Text(text, style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600,
+          fontSize: 11, color: color)),
+      ]),
+    );
+  }
 }

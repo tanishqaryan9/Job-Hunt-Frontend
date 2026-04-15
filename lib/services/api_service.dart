@@ -1,12 +1,18 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 
 class ApiService {
-
   static const String _prodUrl = 'https://job-posting-u2lr.onrender.com';
   static const _storage = FlutterSecureStorage();
+
+  // FIX: saved-jobs backed by SharedPreferences — survives app restarts
+  final Map<int, Job> _savedJobsMap = {};
+  bool _savedJobsLoaded = false;
+
   late final Dio _dio;
 
   ApiService() {
@@ -40,13 +46,82 @@ class ApiService {
         handler.next(e);
       },
     ));
+
+    // Pre-load saved jobs from disk so isJobSaved() is accurate immediately
+    _loadSavedJobsFromPrefs();
   }
 
+  // ── Saved jobs persistence ────────────────────────────────────
+  static const _savedJobsPrefKey = 'saved_jobs_v1';
+
+  Future<void> _loadSavedJobsFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_savedJobsPrefKey);
+      if (raw != null) {
+        final List decoded = jsonDecode(raw);
+        for (final item in decoded) {
+          final job = Job.fromJson(item as Map<String, dynamic>);
+          _savedJobsMap[job.id] = job;
+        }
+      }
+    } catch (_) {}
+    _savedJobsLoaded = true;
+  }
+
+  Future<void> _persistSavedJobs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _savedJobsMap.values
+          .map((j) => {
+                'id': j.id,
+                'title': j.title,
+                'description': j.description,
+                'location': j.location,
+                'salary': j.salary,
+                'salaryPeriod': j.salaryPeriod,
+                'jobType': j.jobType,
+                'createdByName': j.createdByName,
+                'createdById': j.createdById,
+                'latitude': j.latitude,
+                'longitude': j.longitude,
+                'createdAt': j.createdAt,
+                'skills': j.skills.map((s) => s.toJson()).toList(),
+              })
+          .toList();
+      await prefs.setString(_savedJobsPrefKey, jsonEncode(list));
+    } catch (_) {}
+  }
+
+  bool isJobSaved(int jobId) => _savedJobsMap.containsKey(jobId);
+
+  void saveJob(Job job) {
+    _savedJobsMap[job.id] = job;
+    _persistSavedJobs();
+  }
+
+  void unsaveJob(int jobId) {
+    _savedJobsMap.remove(jobId);
+    _persistSavedJobs();
+  }
+
+  void toggleSaveJob(Job job) {
+    if (isJobSaved(job.id)) {
+      unsaveJob(job.id);
+    } else {
+      saveJob(job);
+    }
+  }
+
+  List<Job> getSavedJobs() => List.unmodifiable(_savedJobsMap.values.toList());
+
+  // ── Token helpers ─────────────────────────────────────────────
   Future<bool> _refreshToken() async {
     try {
       final refreshToken = await _storage.read(key: 'refresh_token');
       if (refreshToken == null) return false;
-      final response = await _dio.post('/auth/refresh', data: {'refreshToken': refreshToken});
+      final response = await _dio
+          .post('/auth/refresh', data: {'refreshToken': refreshToken});
       final auth = AuthResponse.fromJson(response.data);
       await _saveTokens(auth);
       return true;
@@ -62,7 +137,8 @@ class ApiService {
       await _storage.write(key: 'profile_id', value: auth.profileId.toString());
     }
     if (auth.appUserId != null) {
-      await _storage.write(key: 'app_user_id', value: auth.appUserId.toString());
+      await _storage.write(
+          key: 'app_user_id', value: auth.appUserId.toString());
     }
   }
 
@@ -91,22 +167,45 @@ class ApiService {
 
   Future<AuthResponse> signup(SignupRequest req) async {
     await _dio.post('/auth/signup', data: req.toJson());
-    final auth = await login(LoginRequest(username: req.username, password: req.password));
+    final auth = await login(
+        LoginRequest(username: req.username, password: req.password));
     return auth;
   }
 
   Future<void> logout() async {
     final refreshToken = await _storage.read(key: 'refresh_token');
-    try { await _dio.post('/auth/logout', data: {'refreshToken': refreshToken}); } catch (_) {}
+    try {
+      await _dio.post('/auth/logout', data: {'refreshToken': refreshToken});
+    } catch (_) {}
     await clearTokens();
   }
 
+  Future<void> sendOtp({required String type, required String value}) async {
+    await _dio.post('/auth/otp/send', data: {'type': type, 'value': value});
+  }
+
+  Future<void> verifyOtp({
+    required String type,
+    required String value,
+    required String otp,
+  }) async {
+    await _dio.post('/auth/otp/verify', data: {
+      'type': type,
+      'value': value,
+      'otp': otp,
+    });
+  }
+
   // ── USERS ─────────────────────────────────────────────
-  Future<PageResponse<UserProfile>> getUsers({int page = 0, int size = 10}) async {
-    final res = await _dio.get('/users', queryParameters: {'page': page, 'size': size});
+  Future<PageResponse<UserProfile>> getUsers(
+      {int page = 0, int size = 10}) async {
+    final res =
+        await _dio.get('/users', queryParameters: {'page': page, 'size': size});
     final data = res.data;
     return PageResponse<UserProfile>(
-      content: (data['content'] as List).map((j) => UserProfile.fromJson(j)).toList(),
+      content: (data['content'] as List)
+          .map((j) => UserProfile.fromJson(j))
+          .toList(),
       page: data['number'] ?? 0,
       size: data['size'] ?? size,
       totalElements: data['totalElements'] ?? 0,
@@ -124,13 +223,21 @@ class ApiService {
     return UserProfile.fromJson(res.data);
   }
 
-  /// Saves the user's GPS coordinates to the backend so distance-based feed works.
-  Future<UserProfile> updateUserLocation(int userId, double latitude, double longitude) async {
+  Future<UserProfile> updateUserLocation(
+      int userId, double latitude, double longitude) async {
     final res = await _dio.patch('/users/$userId', data: {
       'latitude': latitude,
       'longitude': longitude,
     });
     return UserProfile.fromJson(res.data);
+  }
+
+  // FIX: Register FCM token with the backend so push notifications work on mobile.
+  // Called from auth_provider.dart after every login / signup.
+  Future<void> registerFcmToken(int userId, String fcmToken) async {
+    try {
+      await _dio.patch('/users/$userId', data: {'fcmToken': fcmToken});
+    } catch (_) {}
   }
 
   Future<UserProfile> addSkillToUser(int userId, int skillId) async {
@@ -150,16 +257,18 @@ class ApiService {
   // ── PROFILE PHOTO ─────────────────────────────────────
   Future<UserProfile> uploadProfilePhoto(int userId, File imageFile) async {
     final formData = FormData.fromMap({
-      'file': await MultipartFile.fromFile(imageFile.path, filename: 'profile_$userId.jpg'),
+      'file': await MultipartFile.fromFile(imageFile.path,
+          filename: 'profile_$userId.jpg'),
     });
-    final res = await _dio.patch('/users/$userId', data: formData,
-        options: Options(contentType: 'multipart/form-data'));
+    final res = await _dio.patch('/users/$userId',
+        data: formData, options: Options(contentType: 'multipart/form-data'));
     return UserProfile.fromJson(res.data);
   }
 
   // ── JOBS ──────────────────────────────────────────────
   Future<PageResponse<Job>> getJobs({int page = 0, int size = 10}) async {
-    final res = await _dio.get('/jobs', queryParameters: {'page': page, 'size': size});
+    final res =
+        await _dio.get('/jobs', queryParameters: {'page': page, 'size': size});
     final data = res.data;
     return PageResponse<Job>(
       content: (data['content'] as List).map((j) => Job.fromJson(j)).toList(),
@@ -180,44 +289,16 @@ class ApiService {
     return (res.data as List).map((j) => Job.fromJson(j)).toList();
   }
 
-  /// Gets all applications for a specific job (employer view).
-  Future<List<JobApplication>> getApplicationsByJob(int jobId) async {
-    // Backend has findByJobId in the repository — call the general applications
-    // endpoint and filter, since there's no dedicated /jobs/{id}/applications route.
-    // We fetch all pages and filter by jobId.
-    final List<JobApplication> results = [];
-    int page = 0;
-    while (true) {
-      final res = await _dio.get('/application', queryParameters: {'page': page, 'size': 50});
-      final data = res.data;
-      final content = data['content'] ?? data;
-      final apps = (content as List).map((j) => JobApplication.fromJson(j)).toList();
-      results.addAll(apps.where((a) => a.jobId == jobId));
-      final totalPages = data['totalPages'] ?? 1;
-      if (page >= totalPages - 1 || apps.isEmpty) break;
-      page++;
-    }
-    return results;
-  }
-
-  /// Creates a job.
-  /// - Automatically injects `createdByUserId` (profileId) from secure storage.
-  /// - Remaps `jobType` → `job_type` (backend DTO is snake_case).
-  /// - Accepts optional `latitude` and `longitude` to enable distance-based feed.
   Future<Job> createJob(Map<String, dynamic> job) async {
     final payload = Map<String, dynamic>.from(job);
-
-    // jobType → job_type
     if (payload.containsKey('jobType') && !payload.containsKey('job_type')) {
       payload['job_type'] = payload.remove('jobType');
     }
-
-    // Inject createdByUserId — required by backend @NotNull validation
-    if (!payload.containsKey('createdByUserId') || payload['createdByUserId'] == null) {
+    if (!payload.containsKey('createdByUserId') ||
+        payload['createdByUserId'] == null) {
       final profileId = await getProfileId();
       if (profileId != null) payload['createdByUserId'] = profileId;
     }
-
     final res = await _dio.post('/jobs', data: payload);
     return Job.fromJson(res.data);
   }
@@ -232,8 +313,6 @@ class ApiService {
   }
 
   // ── JOB SKILLS ────────────────────────────────────────
-  /// Links a skill to a job via POST /jobs/{jobId}/skills/{skillId}.
-  /// AddJobRequestDto has no skillIds field — skills must be attached separately.
   Future<Job> addSkillToJob(int jobId, int skillId) async {
     final res = await _dio.post('/jobs/$jobId/skills/$skillId');
     return Job.fromJson(res.data);
@@ -244,14 +323,33 @@ class ApiService {
   }
 
   // ── APPLICATIONS ──────────────────────────────────────
-  Future<List<JobApplication>> getApplications({int page = 0, int size = 20}) async {
-    final res = await _dio.get('/application', queryParameters: {'page': page, 'size': size});
+  Future<List<JobApplication>> getApplications(
+      {int page = 0, int size = 20}) async {
+    final res = await _dio
+        .get('/application', queryParameters: {'page': page, 'size': size});
     final data = res.data;
     final content = data['content'] ?? data;
     return (content as List).map((j) => JobApplication.fromJson(j)).toList();
   }
 
-  Future<JobApplication> createApplication(int jobId, int userId, {String? coverLetter}) async {
+  /// FIX: Use the dedicated /by-user/{userId} endpoint so each user only sees
+  /// their own applications. Also deduplicates by application ID.
+  Future<List<JobApplication>> getMyApplications(int userId) async {
+    final res = await _dio.get('/application/by-user/$userId');
+    final list =
+        (res.data as List).map((j) => JobApplication.fromJson(j)).toList();
+    // Deduplicate by application id (safeguard)
+    final seen = <int>{};
+    return list.where((a) => seen.add(a.id)).toList();
+  }
+
+  Future<List<JobApplication>> getApplicationsByJob(int jobId) async {
+    final res = await _dio.get('/application/by-job/$jobId');
+    return (res.data as List).map((j) => JobApplication.fromJson(j)).toList();
+  }
+
+  Future<JobApplication> createApplication(int jobId, int userId,
+      {String? coverLetter}) async {
     final res = await _dio.post('/application', data: {
       'jobId': jobId,
       'userId': userId,
@@ -271,12 +369,16 @@ class ApiService {
 
   // ── FEED ──────────────────────────────────────────────
   Future<List<Job>> getNearestJobs(int userId, {int k = 10}) async {
-    final res = await _dio.get('/feed/$userId/nearest', queryParameters: {'k': k});
+    final res =
+        await _dio.get('/feed/$userId/nearest', queryParameters: {'k': k});
     return (res.data as List).map((j) => Job.fromJson(j)).toList();
   }
 
-  Future<List<Job>> getJobsBySalary(double min, double max) async {
-    final res = await _dio.get('/feed/salary', queryParameters: {'min': min, 'max': max});
+  Future<List<Job>> getJobsBySalary(double min, double max,
+      {int? userId}) async {
+    final params = <String, dynamic>{'min': min, 'max': max};
+    if (userId != null) params['userId'] = userId;
+    final res = await _dio.get('/feed/salary', queryParameters: params);
     return (res.data as List).map((j) => Job.fromJson(j)).toList();
   }
 
@@ -285,9 +387,12 @@ class ApiService {
     return (res.data as List).map((j) => Job.fromJson(j)).toList();
   }
 
-  Future<List<Job>> getCombinedFeed(int userId, {double maxDistanceKm = 50, int page = 0, int size = 10}) async {
+  Future<List<Job>> getCombinedFeed(int userId,
+      {double maxDistanceKm = 50, int page = 0, int size = 10}) async {
     final res = await _dio.get('/feed/$userId', queryParameters: {
-      'maxDistanceKm': maxDistanceKm, 'page': page, 'size': size,
+      'maxDistanceKm': maxDistanceKm,
+      'page': page,
+      'size': size,
     });
     return (res.data as List).map((j) => Job.fromJson(j)).toList();
   }

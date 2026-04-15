@@ -1,3 +1,4 @@
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
@@ -19,6 +20,14 @@ class AuthProvider extends ChangeNotifier {
   String? get error => _error;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
+  bool get needsProfileCompletion =>
+      _status == AuthStatus.authenticated && _currentUserId == null;
+
+  void markProfileCompleted(UserProfile profile) {
+    _currentUser = profile;
+    _currentUserId = profile.id;
+    notifyListeners();
+  }
 
   Future<void> tryRestoreSession() async {
     _isLoading = true;
@@ -28,6 +37,10 @@ class AuthProvider extends ChangeNotifier {
       _currentUserId = await apiService.getProfileId();
       _appUserId = await apiService.getAppUserId();
       _status = AuthStatus.authenticated;
+      // FIX: Re-register FCM token on session restore (token may have rotated)
+      if (_currentUserId != null) {
+        _registerFcmToken(_currentUserId!);
+      }
     } else {
       _status = AuthStatus.unauthenticated;
     }
@@ -52,11 +65,15 @@ class AuthProvider extends ChangeNotifier {
     _error = null;
     notifyListeners();
     try {
-      final auth = await apiService.login(
-          LoginRequest(username: username, password: password));
+      final auth = await apiService
+          .login(LoginRequest(username: username, password: password));
       _applyAuthResponse(auth);
       _isLoading = false;
       notifyListeners();
+      // FIX: Register FCM token after successful login so push notifications work
+      if (_currentUserId != null) {
+        _registerFcmToken(_currentUserId!);
+      }
       return true;
     } catch (e) {
       _error = _parseError(e, isLogin: true);
@@ -75,6 +92,10 @@ class AuthProvider extends ChangeNotifier {
       _applyAuthResponse(auth);
       _isLoading = false;
       notifyListeners();
+      // FIX: Register FCM token after successful signup
+      if (_currentUserId != null) {
+        _registerFcmToken(_currentUserId!);
+      }
       return true;
     } catch (e) {
       _error = _parseError(e, isLogin: false);
@@ -107,6 +128,9 @@ class AuthProvider extends ChangeNotifier {
       }
       _isLoading = false;
       notifyListeners();
+      if (_currentUserId != null) {
+        _registerFcmToken(_currentUserId!);
+      }
       return true;
     } catch (e) {
       _error = 'OAuth login failed. Please try again.';
@@ -150,23 +174,46 @@ class AuthProvider extends ChangeNotifier {
     _currentUserId = auth.profileId;
   }
 
-  /// Converts Dio/HTTP errors into human-readable messages.
-  /// [isLogin] = true for login, false for signup — changes 404/400 wording.
+  // FIX: Fetch FCM token and send it to the backend.
+  // Called after every login, signup, OAuth, and session restore.
+  // Fire-and-forget — never blocks authentication flow.
+  void _registerFcmToken(int userId) async {
+    try {
+      // Request permission (iOS requires this; Android grants automatically)
+      final messaging = FirebaseMessaging.instance;
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      if (settings.authorizationStatus == AuthorizationStatus.denied) return;
+
+      final token = await messaging.getToken();
+      if (token != null) {
+        await apiService.registerFcmToken(userId, token);
+      }
+      // Re-register when the token rotates
+      messaging.onTokenRefresh.listen((newToken) {
+        apiService.registerFcmToken(userId, newToken);
+      });
+    } catch (_) {
+      // FCM failure must never crash auth
+    }
+  }
+
   String _parseError(dynamic e, {bool isLogin = true}) {
     final s = e.toString();
 
-    // ── Try to read the backend JSON error body first ──────────────
     try {
       final dynamic response = (e as dynamic).response?.data;
       final int? statusCode = (e as dynamic).response?.statusCode;
 
       if (response != null) {
-        final msg = response['message']?.toString()
-            ?? response['error']?.toString()
-            ?? response['detail']?.toString();
+        final msg = response['message']?.toString() ??
+            response['error']?.toString() ??
+            response['detail']?.toString();
 
         if (msg != null && msg.isNotEmpty) {
-          // Validation failed (Spring @Valid errors)
           if (msg.contains('Validation failed') || msg.contains('validation')) {
             final match = RegExp(r'\{(.+?)\}').firstMatch(msg);
             if (match != null) {
@@ -179,13 +226,11 @@ class AuthProvider extends ChangeNotifier {
             return 'Please check your inputs and try again.';
           }
 
-          // Already-taken username
           if (msg.toLowerCase().contains('already exists') ||
               msg.toLowerCase().contains('already taken')) {
             return 'That username is already taken. Try a different one.';
           }
 
-          // User not found (404 from backend)
           if (statusCode == 404 ||
               msg.toLowerCase().contains('not found') ||
               msg.toLowerCase().contains('no user') ||
@@ -195,7 +240,6 @@ class AuthProvider extends ChangeNotifier {
                 : 'Could not find your account. Please try again.';
           }
 
-          // Bad credentials
           if (statusCode == 401 ||
               msg.toLowerCase().contains('bad credentials') ||
               msg.toLowerCase().contains('invalid credentials') ||
@@ -206,7 +250,6 @@ class AuthProvider extends ChangeNotifier {
           return msg;
         }
 
-        // No message field — use status code alone
         if (statusCode == 404) {
           return isLogin
               ? 'Account not found. Check your username or sign up.'
@@ -215,11 +258,11 @@ class AuthProvider extends ChangeNotifier {
         if (statusCode == 401) return 'Incorrect username or password.';
         if (statusCode == 409) return 'That username is already taken.';
         if (statusCode == 400) return 'Please check your inputs and try again.';
-        if (statusCode == 500) return 'Server error — please try again shortly.';
+        if (statusCode == 500)
+          return 'Server error — please try again shortly.';
       }
     } catch (_) {}
 
-    // ── Fallback: inspect the stringified exception ────────────────
     if (s.contains('404')) {
       return isLogin
           ? 'Account not found. Check your username or sign up.'

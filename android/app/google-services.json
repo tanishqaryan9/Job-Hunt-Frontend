@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "581410586926",
+    "project_id": "job-posting-17f65",
+    "storage_bucket": "job-posting-17f65.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:581410586926:android:cdb54887ea9d83d8c4fabf",
+        "android_client_info": {
+          "package_name": "com.example.jobhunt"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "581410586926-7rjb79tn29c19mkl2fuiv6cquqolaf2i.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB7sw0ybgMERJUpoqzTmcdPexuCAY6X9D0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "581410586926-7rjb79tn29c19mkl2fuiv6cquqolaf2i.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

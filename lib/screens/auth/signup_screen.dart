@@ -1,78 +1,96 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import '../../theme/app_theme.dart';
 import '../../services/auth_provider.dart';
+import '../../services/api_service.dart';
 import '../../widgets/brutal_widgets.dart';
 import '../../models/models.dart';
+import '../../screens/main_shell.dart';
+import 'oauth_complete_profile_screen.dart';
 
-// ── India State → Cities data ─────────────────────────────────
 const Map<String, List<String>> _indiaCities = {
-  'Andhra Pradesh': ['Visakhapatnam','Vijayawada','Guntur','Nellore','Kurnool','Tirupati','Kakinada','Rajahmundry','Kadapa','Anantapur'],
-  'Arunachal Pradesh': ['Itanagar','Naharlagun','Pasighat','Tezpur','Bomdila'],
-  'Assam': ['Guwahati','Silchar','Dibrugarh','Jorhat','Nagaon','Tinsukia','Tezpur','Bongaigaon','Dhubri'],
-  'Bihar': ['Patna','Gaya','Bhagalpur','Muzaffarpur','Darbhanga','Purnia','Arrah','Begusarai','Katihar','Munger'],
-  'Chhattisgarh': ['Raipur','Bhilai','Bilaspur','Korba','Durg','Rajnandgaon','Jagdalpur','Raigarh','Ambikapur'],
-  'Delhi': ['New Delhi','Delhi','Dwarka','Rohini','Pitampura','Lajpat Nagar','Saket','Janakpuri','Preet Vihar'],
-  'Goa': ['Panaji','Margao','Vasco da Gama','Mapusa','Ponda','Bicholim','Curchorem'],
-  'Gujarat': ['Ahmedabad','Surat','Vadodara','Rajkot','Bhavnagar','Jamnagar','Junagadh','Gandhinagar','Anand','Nadiad'],
-  'Haryana': ['Faridabad','Gurugram','Panipat','Ambala','Yamunanagar','Rohtak','Hisar','Karnal','Sonipat','Panchkula'],
-  'Himachal Pradesh': ['Shimla','Dharamsala','Solan','Mandi','Kangra','Kullu','Hamirpur','Baddi'],
-  'Jharkhand': ['Ranchi','Jamshedpur','Dhanbad','Bokaro','Deoghar','Phusro','Hazaribagh','Giridih','Ramgarh'],
-  'Karnataka': ['Bengaluru','Mysuru','Mangaluru','Hubballi','Belagavi','Kalaburagi','Davangere','Ballari','Vijayapura','Shivamogga'],
-  'Kerala': ['Thiruvananthapuram','Kochi','Kozhikode','Thrissur','Kollam','Kannur','Alappuzha','Malappuram','Palakkad','Kottayam'],
-  'Madhya Pradesh': ['Indore','Bhopal','Jabalpur','Gwalior','Ujjain','Sagar','Dewas','Satna','Ratlam','Rewa'],
-  'Maharashtra': ['Mumbai','Pune','Nagpur','Thane','Nashik','Aurangabad','Solapur','Kolhapur','Navi Mumbai','Amravati','Malegaon'],
-  'Manipur': ['Imphal','Thoubal','Bishnupur','Churachandpur','Senapati'],
-  'Meghalaya': ['Shillong','Tura','Jowai','Nongstoin','Baghmara'],
-  'Mizoram': ['Aizawl','Lunglei','Champhai','Serchhip','Kolasib'],
-  'Nagaland': ['Kohima','Dimapur','Mokokchung','Tuensang','Wokha'],
-  'Odisha': ['Bhubaneswar','Cuttack','Rourkela','Brahmapur','Sambalpur','Puri','Balasore','Bhadrak','Baripada','Jharsuguda'],
-  'Punjab': ['Ludhiana','Amritsar','Jalandhar','Patiala','Bathinda','Mohali','Firozpur','Hoshiarpur','Batala','Moga'],
-  'Rajasthan': ['Jaipur','Jodhpur','Kota','Bikaner','Ajmer','Udaipur','Bhilwara','Alwar','Bharatpur','Sikar'],
-  'Sikkim': ['Gangtok','Namchi','Gyalshing','Mangan','Rangpo'],
-  'Tamil Nadu': ['Chennai','Coimbatore','Madurai','Tiruchirappalli','Salem','Tirunelveli','Tiruppur','Vellore','Erode','Thoothukudi'],
-  'Telangana': ['Hyderabad','Warangal','Nizamabad','Karimnagar','Khammam','Ramagundam','Mahbubnagar','Nalgonda','Adilabad','Suryapet'],
-  'Tripura': ['Agartala','Dharmanagar','Udaipur','Kailasahar','Belonia'],
-  'Uttar Pradesh': ['Lucknow','Kanpur','Varanasi','Agra','Prayagraj','Meerut','Ghaziabad','Noida','Bareilly','Aligarh','Moradabad','Hapur'],
-  'Uttarakhand': ['Dehradun','Haridwar','Roorkee','Haldwani','Rudrapur','Kashipur','Rishikesh','Kotdwar'],
-  'West Bengal': ['Kolkata','Asansol','Siliguri','Durgapur','Bardhaman','Malda','Baharampur','Habra','Kharagpur','Shantipur'],
-  'Andaman and Nicobar Islands': ['Port Blair','Diglipur','Rangat'],
+  'Andhra Pradesh': ['Visakhapatnam','Vijayawada','Guntur','Nellore','Kurnool','Tirupati','Kakinada','Rajahmundry'],
+  'Arunachal Pradesh': ['Itanagar','Naharlagun','Pasighat'],
+  'Assam': ['Guwahati','Silchar','Dibrugarh','Jorhat','Nagaon'],
+  'Bihar': ['Patna','Gaya','Bhagalpur','Muzaffarpur','Darbhanga','Purnia'],
+  'Chhattisgarh': ['Raipur','Bhilai','Bilaspur','Korba','Durg'],
+  'Delhi': ['New Delhi','Delhi','Dwarka','Rohini','Pitampura','Lajpat Nagar','Saket'],
+  'Goa': ['Panaji','Margao','Vasco da Gama','Mapusa'],
+  'Gujarat': ['Ahmedabad','Surat','Vadodara','Rajkot','Bhavnagar','Jamnagar','Gandhinagar'],
+  'Haryana': ['Faridabad','Gurugram','Panipat','Ambala','Rohtak','Hisar'],
+  'Himachal Pradesh': ['Shimla','Dharamsala','Solan','Mandi'],
+  'Jharkhand': ['Ranchi','Jamshedpur','Dhanbad','Bokaro'],
+  'Karnataka': ['Bengaluru','Mysuru','Mangaluru','Hubballi','Belagavi','Davangere'],
+  'Kerala': ['Thiruvananthapuram','Kochi','Kozhikode','Thrissur','Kollam','Kannur'],
+  'Madhya Pradesh': ['Indore','Bhopal','Jabalpur','Gwalior','Ujjain'],
+  'Maharashtra': ['Mumbai','Pune','Nagpur','Thane','Nashik','Aurangabad','Solapur','Navi Mumbai'],
+  'Manipur': ['Imphal','Thoubal'],
+  'Meghalaya': ['Shillong','Tura'],
+  'Mizoram': ['Aizawl','Lunglei'],
+  'Nagaland': ['Kohima','Dimapur'],
+  'Odisha': ['Bhubaneswar','Cuttack','Rourkela','Brahmapur','Sambalpur'],
+  'Punjab': ['Ludhiana','Amritsar','Jalandhar','Patiala','Bathinda','Mohali'],
+  'Rajasthan': ['Jaipur','Jodhpur','Kota','Bikaner','Ajmer','Udaipur'],
+  'Sikkim': ['Gangtok','Namchi'],
+  'Tamil Nadu': ['Chennai','Coimbatore','Madurai','Tiruchirappalli','Salem','Tiruppur'],
+  'Telangana': ['Hyderabad','Warangal','Nizamabad','Karimnagar'],
+  'Tripura': ['Agartala'],
+  'Uttar Pradesh': ['Lucknow','Kanpur','Varanasi','Agra','Prayagraj','Meerut','Ghaziabad','Noida','Bareilly'],
+  'Uttarakhand': ['Dehradun','Haridwar','Roorkee','Haldwani','Rudrapur'],
+  'West Bengal': ['Kolkata','Asansol','Siliguri','Durgapur','Bardhaman'],
   'Chandigarh': ['Chandigarh'],
-  'Dadra and Nagar Haveli and Daman and Diu': ['Daman','Diu','Silvassa'],
-  'Jammu & Kashmir': ['Srinagar','Jammu','Anantnag','Baramulla','Udhampur','Sopore'],
+  'Jammu & Kashmir': ['Srinagar','Jammu','Anantnag','Baramulla'],
   'Ladakh': ['Leh','Kargil'],
-  'Lakshadweep': ['Kavaratti','Andrott','Amini'],
-  'Puducherry': ['Puducherry','Karaikal','Yanam','Mahé'],
+  'Puducherry': ['Puducherry','Karaikal'],
 };
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
-  @override State<SignupScreen> createState() => _SignupScreenState();
+  @override
+  State<SignupScreen> createState() => _SignupScreenState();
 }
 
 class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderStateMixin {
-  final _formKey        = GlobalKey<FormState>();
-  final _usernameCtrl   = TextEditingController();
-  final _passwordCtrl   = TextEditingController();
-  final _nameCtrl       = TextEditingController();
-  final _numberCtrl     = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  final _usernameCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  final _numberCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
   final _experienceCtrl = TextEditingController(text: '0');
 
-  bool    _showPassword  = false;
-  int     _step          = 0;
-  bool    _showWakeUpHint = false;
-  bool    _gettingLoc    = false;
+  bool _showPassword = false;
+  int _step = 0; // 0=account, 1=profile, 2=location, 3=verify
+  bool _showWakeUpHint = false;
+  bool _gettingLoc = false;
+  bool _oauthLoading = false;
+
+  // OTP state
+  bool _phoneOtpSent = false;
+  bool _phoneVerified = false;
+  bool _emailOtpSent = false;
+  bool _emailVerified = false;
+  bool _sendingOtp = false;
+  bool _verifyingOtp = false;
+  final _phoneOtpCtrl = TextEditingController();
+  final _emailOtpCtrl = TextEditingController();
+  int _otpResendCountdown = 0;
+  Timer? _resendTimer;
 
   // Location state
-  String?  _selectedState;
-  String?  _selectedCity;
-  double?  _latitude;
-  double?  _longitude;
-  bool     _locationAutoFilled = false; // true when GPS was used
+  String? _selectedState;
+  String? _selectedCity;
+  double? _latitude;
+  double? _longitude;
+  bool _locationAutoFilled = false;
 
   late AnimationController _stepCtrl;
-  late Animation<double>   _stepFade;
+  late Animation<double> _stepFade;
 
   List<String> get _sortedStates => _indiaCities.keys.toList()..sort();
   List<String> get _citiesForState => _selectedState != null ? (_indiaCities[_selectedState] ?? []) : [];
@@ -82,6 +100,9 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     if (_selectedState != null) return _selectedState!;
     return '';
   }
+
+  static const String _backendUrl = 'https://job-posting-u2lr.onrender.com';
+  static const String _callbackScheme = 'posting';
 
   @override
   void initState() {
@@ -94,307 +115,827 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   @override
   void dispose() {
     _stepCtrl.dispose();
-    for (final c in [_usernameCtrl, _passwordCtrl, _nameCtrl, _numberCtrl, _experienceCtrl]) {
+    _resendTimer?.cancel();
+    for (final c in [_usernameCtrl, _passwordCtrl, _nameCtrl, _numberCtrl,
+        _emailCtrl, _experienceCtrl, _phoneOtpCtrl, _emailOtpCtrl]) {
       c.dispose();
     }
     super.dispose();
   }
 
-  void _nextStep() {
-    if (!_formKey.currentState!.validate()) return;
-    _stepCtrl.reverse().then((_) { setState(() => _step++); _stepCtrl.forward(); });
+  void _goTo(int step) {
+    _stepCtrl.reverse().then((_) { setState(() => _step = step); _stepCtrl.forward(); });
   }
 
-  // ── GPS auto-detect ─────────────────────────────────────────
+  void _nextStep() {
+    if (!_formKey.currentState!.validate()) return;
+    _goTo(_step + 1);
+  }
+
+  // ── OTP helpers ────────────────────────────────────────────────────────────
+  void _startResendTimer() {
+    _otpResendCountdown = 30;
+    _resendTimer?.cancel();
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (_otpResendCountdown <= 0) { t.cancel(); return; }
+      if (mounted) setState(() => _otpResendCountdown--);
+    });
+  }
+
+  Future<void> _sendPhoneOtp() async {
+    final phone = _numberCtrl.text.trim();
+    if (phone.length < 10) return;
+    setState(() => _sendingOtp = true);
+    try {
+      await apiService.sendOtp(type: 'phone', value: phone);
+      setState(() { _phoneOtpSent = true; _sendingOtp = false; });
+      _startResendTimer();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('OTP sent to +91 $phone'),
+          backgroundColor: AppTheme.teal,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      setState(() => _sendingOtp = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to send OTP: ${_shortError(e)}'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  Future<void> _verifyPhoneOtp() async {
+    final otp = _phoneOtpCtrl.text.trim();
+    if (otp.length < 4) return;
+    setState(() => _verifyingOtp = true);
+    try {
+      await apiService.verifyOtp(type: 'phone', value: _numberCtrl.text.trim(), otp: otp);
+      setState(() { _phoneVerified = true; _verifyingOtp = false; });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Phone verified ✓'),
+          backgroundColor: AppTheme.green,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      setState(() => _verifyingOtp = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Incorrect OTP. ${_shortError(e)}'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  Future<void> _sendEmailOtp() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) return;
+    setState(() => _sendingOtp = true);
+    try {
+      await apiService.sendOtp(type: 'email', value: email);
+      setState(() { _emailOtpSent = true; _sendingOtp = false; });
+      _startResendTimer();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('OTP sent to $email'),
+          backgroundColor: AppTheme.teal,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      setState(() => _sendingOtp = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to send OTP: ${_shortError(e)}'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  Future<void> _verifyEmailOtp() async {
+    final otp = _emailOtpCtrl.text.trim();
+    if (otp.length < 4) return;
+    setState(() => _verifyingOtp = true);
+    try {
+      await apiService.verifyOtp(type: 'email', value: _emailCtrl.text.trim(), otp: otp);
+      setState(() { _emailVerified = true; _verifyingOtp = false; });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Email verified ✓'),
+          backgroundColor: AppTheme.green,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      setState(() => _verifyingOtp = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Incorrect OTP. ${_shortError(e)}'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  String _shortError(dynamic e) {
+    try {
+      final msg = (e as dynamic).response?.data?['message']?.toString();
+      if (msg != null) return msg;
+    } catch (_) {}
+    return 'Please try again.';
+  }
+
+  // ── GPS ────────────────────────────────────────────────────────────────────
   Future<void> _autoDetectLocation() async {
     setState(() => _gettingLoc = true);
     try {
       LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permission denied — please select state & city manually.'), backgroundColor: AppTheme.amber, behavior: SnackBarBehavior.floating));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Permission denied — please select manually.'),
+          backgroundColor: AppTheme.amber, behavior: SnackBarBehavior.floating));
         return;
       }
-      final pos = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium));
-      setState(() {
-        _latitude  = pos.latitude;
-        _longitude = pos.longitude;
-        _locationAutoFilled = true;
-      });
-      // Rough GPS → state mapping for common coords (covers most of India)
-      final (state, city) = _guessStateCity(pos.latitude, pos.longitude);
-      if (state != null) {
-        setState(() {
-          _selectedState = state;
-          _selectedCity  = city;
-        });
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium));
+      setState(() { _latitude = pos.latitude; _longitude = pos.longitude; _locationAutoFilled = true; });
+
+      String? detectedState, detectedCity;
+      try {
+        final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+        if (placemarks.isNotEmpty) {
+          final p = placemarks.first;
+          detectedState = p.administrativeArea;
+          detectedCity = p.locality?.isNotEmpty == true ? p.locality : p.subAdministrativeArea;
+        }
+      } catch (_) {}
+
+      if (detectedState != null) {
+        final matched = _sortedStates.firstWhere(
+          (s) => s.toLowerCase() == detectedState!.toLowerCase(),
+          orElse: () => _sortedStates.firstWhere(
+            (s) => s.toLowerCase().contains(detectedState!.toLowerCase()) ||
+                   detectedState.toLowerCase().contains(s.toLowerCase()),
+            orElse: () => '',
+          ),
+        );
+        if (matched.isNotEmpty) {
+          String? matchedCity;
+          if (detectedCity != null) {
+            final cities = _indiaCities[matched] ?? [];
+            final mc = cities.firstWhere(
+              (c) => c.toLowerCase() == detectedCity!.toLowerCase(),
+              orElse: () => cities.firstWhere(
+                (c) => c.toLowerCase().contains(detectedCity!.toLowerCase()) ||
+                       detectedCity.toLowerCase().contains(c.toLowerCase()),
+                orElse: () => '',
+              ),
+            );
+            if (mc.isNotEmpty) matchedCity = mc;
+          }
+          setState(() { _selectedState = matched; _selectedCity = matchedCity; });
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('Location set: ${matchedCity ?? detectedCity ?? 'your area'}, $matched'),
+              backgroundColor: AppTheme.teal, behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+            ));
+          }
+          return;
+        }
       }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(_selectedCity != null ? 'Location: $_selectedCity, $_selectedState' : 'GPS captured — please confirm your city below.'),
-        backgroundColor: AppTheme.teal, behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 3),
-      ));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('GPS captured — please confirm state & city below.'),
+        backgroundColor: AppTheme.amber, behavior: SnackBarBehavior.floating));
     } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not get GPS — select manually.'), backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Could not get GPS — select manually.'),
+        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
     } finally {
       if (mounted) setState(() => _gettingLoc = false);
     }
   }
 
-  /// Rough bounding-box lookup — returns (state, city?) for common metro regions.
-  (String?, String?) _guessStateCity(double lat, double lon) {
-    if (lat >= 28.4 && lat <= 28.9 && lon >= 76.8 && lon <= 77.4) return ('Delhi', 'New Delhi');
-    if (lat >= 18.8 && lat <= 19.3 && lon >= 72.7 && lon <= 73.1) return ('Maharashtra', 'Mumbai');
-    if (lat >= 12.8 && lat <= 13.2 && lon >= 77.4 && lon <= 77.8) return ('Karnataka', 'Bengaluru');
-    if (lat >= 22.4 && lat <= 22.8 && lon >= 88.2 && lon <= 88.6) return ('West Bengal', 'Kolkata');
-    if (lat >= 17.2 && lat <= 17.6 && lon >= 78.3 && lon <= 78.7) return ('Telangana', 'Hyderabad');
-    if (lat >= 12.9 && lat <= 13.2 && lon >= 80.1 && lon <= 80.4) return ('Tamil Nadu', 'Chennai');
-    if (lat >= 22.9 && lat <= 23.2 && lon >= 72.5 && lon <= 72.8) return ('Gujarat', 'Ahmedabad');
-    if (lat >= 18.4 && lat <= 18.7 && lon >= 73.7 && lon <= 74.0) return ('Maharashtra', 'Pune');
-    if (lat >= 26.7 && lat <= 27.0 && lon >= 80.8 && lon <= 81.1) return ('Uttar Pradesh', 'Lucknow');
-    if (lat >= 26.8 && lat <= 27.2 && lon >= 75.7 && lon <= 76.0) return ('Rajasthan', 'Jaipur');
-    if (lat >= 30.6 && lat <= 30.9 && lon >= 76.6 && lon <= 76.9) return ('Chandigarh', 'Chandigarh');
-    if (lat >= 23.1 && lat <= 23.4 && lon >= 77.3 && lon <= 77.6) return ('Madhya Pradesh', 'Bhopal');
-    if (lat >= 21.1 && lat <= 21.4 && lon >= 81.5 && lon <= 81.8) return ('Chhattisgarh', 'Raipur');
-    // State-level fallbacks
-    if (lat >= 8.0  && lat <= 12.0 && lon >= 77.0 && lon <= 78.5) return ('Tamil Nadu', null);
-    if (lat >= 12.0 && lat <= 15.0 && lon >= 74.0 && lon <= 78.5) return ('Karnataka', null);
-    if (lat >= 15.0 && lat <= 20.0 && lon >= 73.0 && lon <= 80.0) return ('Maharashtra', null);
-    if (lat >= 20.0 && lat <= 25.0 && lon >= 72.0 && lon <= 75.0) return ('Gujarat', null);
-    if (lat >= 25.0 && lat <= 30.0 && lon >= 70.0 && lon <= 78.0) return ('Rajasthan', null);
-    if (lat >= 27.0 && lat <= 30.0 && lon >= 78.0 && lon <= 84.0) return ('Uttar Pradesh', null);
-    if (lat >= 20.0 && lat <= 24.0 && lon >= 80.0 && lon <= 84.0) return ('Madhya Pradesh', null);
-    if (lat >= 17.0 && lat <= 20.0 && lon >= 78.0 && lon <= 82.0) return ('Telangana', null);
-    return (null, null);
+  // ── OAuth ─────────────────────────────────────────────────────────────────
+  Future<void> _oauthSignup(String provider) async {
+    setState(() { _oauthLoading = true; });
+    try {
+      final authUrl = '$_backendUrl/oauth2/authorization/$provider';
+      final result = await FlutterWebAuth2.authenticate(
+        url: authUrl, callbackUrlScheme: _callbackScheme);
+
+      if (!mounted) return;
+      final uri = Uri.parse(result);
+      final errorParam = uri.queryParameters['error'];
+      if (errorParam != null && errorParam.isNotEmpty) throw Exception(errorParam);
+
+      final accessToken = uri.queryParameters['accessToken'];
+      final refreshToken = uri.queryParameters['refreshToken'];
+      if (accessToken == null || refreshToken == null) throw Exception('No tokens received');
+
+      final profileId = int.tryParse(uri.queryParameters['profileId'] ?? '');
+      final appUserId = int.tryParse(uri.queryParameters['appUserId'] ?? '');
+
+      if (!mounted) return;
+      final auth = context.read<AuthProvider>();
+      final ok = await auth.loginWithOAuthTokens(
+        accessToken, refreshToken, profileId: profileId, appUserId: appUserId);
+
+      if (!mounted) return;
+      if (ok) {
+        if (auth.needsProfileCompletion) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const OAuthCompleteProfileScreen()));
+        } else {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const MainShell()), (_) => false);
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(auth.error ?? 'OAuth failed'),
+          backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().contains('CANCELED') ? 'Sign-in cancelled' : 'OAuth failed. Please try again.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg), backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+    } finally {
+      if (mounted) setState(() => _oauthLoading = false);
+    }
   }
 
-  // ── Submit ──────────────────────────────────────────────────
+  // ── Submit ─────────────────────────────────────────────────────────────────
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (_locationDisplay.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select your state and city.'), backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Please select your state and city.'),
+        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
       return;
     }
     final auth = context.read<AuthProvider>();
-    Future.delayed(const Duration(seconds: 5), () { if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true); });
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
+    });
 
-    final signupReq = SignupRequest(
-      username:   _usernameCtrl.text.trim(),
-      password:   _passwordCtrl.text,
-      name:       _nameCtrl.text.trim(),
-      number:     _numberCtrl.text.trim(),
-      location:   _locationDisplay,
+    final ok = await auth.signup(SignupRequest(
+      username: _usernameCtrl.text.trim(),
+      password: _passwordCtrl.text,
+      name: _nameCtrl.text.trim(),
+      number: _numberCtrl.text.trim(),
+      location: _locationDisplay,
       experience: int.tryParse(_experienceCtrl.text) ?? 0,
-      latitude:   _latitude,
-      longitude:  _longitude,
-    );
-    final ok = await auth.signup(signupReq);
+      latitude: _latitude,
+      longitude: _longitude,
+    ));
     if (mounted) setState(() => _showWakeUpHint = false);
-    if (ok && mounted) { Navigator.of(context).popUntil((route) => route.isFirst); return; }
+    if (ok && mounted) Navigator.of(context).popUntil((r) => r.isFirst);
     if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(auth.error ?? 'Sign up failed'), backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating, duration: const Duration(seconds: 4)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(auth.error ?? 'Sign up failed'),
+        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final busy = auth.isLoading || _oauthLoading || _sendingOtp || _verifyingOtp;
+
     return Scaffold(
       backgroundColor: AppTheme.bg,
       body: SafeArea(child: Stack(children: [
-        Container(decoration: BoxDecoration(gradient: RadialGradient(center: Alignment.topRight, radius: 1.4, colors: [AppTheme.teal.withOpacity(0.10), Colors.transparent]))),
+        Container(decoration: BoxDecoration(gradient: RadialGradient(
+          center: Alignment.topRight, radius: 1.4,
+          colors: [AppTheme.teal.withOpacity(0.10), Colors.transparent]))),
         SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
-          child: Form(key: _formKey, child: FadeTransition(opacity: _stepFade, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // Back button
-            if (_step > 0)
-              GestureDetector(
-                onTap: () { _stepCtrl.reverse().then((_) { setState(() => _step--); _stepCtrl.forward(); }); },
-                child: Container(margin: const EdgeInsets.only(bottom: 20), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                  decoration: BoxDecoration(color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(20), border: Border.all(color: AppTheme.bgMuted)),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.arrow_back_rounded, size: 16, color: AppTheme.textMuted), SizedBox(width: 6), Text('Back', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted))])),
-              ),
-
-            // Step indicator
-            Row(children: List.generate(3, (i) => Expanded(child: Container(
-              height: 3, margin: EdgeInsets.only(right: i < 2 ? 4 : 0),
-              decoration: BoxDecoration(color: i <= _step ? AppTheme.accent : AppTheme.bgMuted, borderRadius: BorderRadius.circular(2)),
-            )))),
-            const SizedBox(height: 32),
-
-            // Step 0 — Account
-            if (_step == 0) ...[
-              const Text('Create Account', style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
-              const SizedBox(height: 4),
-              const Text('Step 1 of 3 · Account details', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
-              const SizedBox(height: 32),
-              BrutalTextField(label: 'Username', controller: _usernameCtrl, prefixIcon: const Icon(Icons.person_outline_rounded), validator: (v) => v!.trim().length < 3 ? 'Username must be at least 3 characters' : null),
-              const SizedBox(height: 16),
-              BrutalTextField(
-                label: 'Password', controller: _passwordCtrl,
-                prefixIcon: const Icon(Icons.lock_outline_rounded),
-                obscureText: !_showPassword,
-                suffixIcon: IconButton(icon: Icon(_showPassword ? Icons.visibility_off_rounded : Icons.visibility_rounded, color: AppTheme.textMuted), onPressed: () => setState(() => _showPassword = !_showPassword)),
-                validator: (v) => v!.length < 6 ? 'Password must be at least 6 characters' : null,
-              ),
-              const SizedBox(height: 32),
-              BrutalButton(label: 'NEXT', onPressed: _nextStep, width: double.infinity),
-            ],
-
-            // Step 1 — Profile
-            if (_step == 1) ...[
-              const Text('Your Profile', style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
-              const SizedBox(height: 4),
-              const Text('Step 2 of 3 · Personal details', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
-              const SizedBox(height: 32),
-              BrutalTextField(label: 'Full Name', controller: _nameCtrl, prefixIcon: const Icon(Icons.badge_outlined), validator: (v) => v!.trim().isEmpty ? 'Enter your name' : null),
-              const SizedBox(height: 16),
-              BrutalTextField(
-                label: 'Phone Number', controller: _numberCtrl,
-                prefixIcon: const Icon(Icons.phone_outlined),
-                keyboardType: TextInputType.phone,
-                validator: (v) => v!.trim().length < 10 ? 'Enter a valid phone number' : null,
-              ),
-              const SizedBox(height: 16),
-              BrutalTextField(
-                label: 'Years of Experience', controller: _experienceCtrl,
-                prefixIcon: const Icon(Icons.work_outline_rounded),
-                keyboardType: TextInputType.number,
-                validator: (v) { final n = int.tryParse(v ?? ''); return (n == null || n < 0) ? 'Enter a valid number' : null; },
-              ),
-              const SizedBox(height: 32),
-              BrutalButton(label: 'NEXT', onPressed: _nextStep, width: double.infinity),
-            ],
-
-            // Step 2 — Location
-            if (_step == 2) ...[
-              const Text('Your Location', style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
-              const SizedBox(height: 4),
-              const Text('Step 3 of 3 · Helps find nearby jobs', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
-              const SizedBox(height: 24),
-
-              // Auto-detect button
-              GestureDetector(
-                onTap: _gettingLoc ? null : _autoDetectLocation,
-                child: Container(
-                  width: double.infinity, padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    gradient: _locationAutoFilled ? LinearGradient(colors: [AppTheme.teal.withOpacity(0.15), AppTheme.teal.withOpacity(0.05)]) : null,
-                    color: _locationAutoFilled ? null : AppTheme.bgElevated,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.5) : AppTheme.bgMuted, width: _locationAutoFilled ? 1.5 : 1),
+          child: Form(
+            key: _formKey,
+            child: FadeTransition(
+              opacity: _stepFade,
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // Back
+                if (_step > 0)
+                  GestureDetector(
+                    onTap: () => _goTo(_step - 1),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                      decoration: BoxDecoration(color: AppTheme.bgElevated,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: AppTheme.bgMuted)),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.arrow_back_rounded, size: 16, color: AppTheme.textMuted),
+                        SizedBox(width: 6),
+                        Text('Back', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+                      ]),
+                    ),
                   ),
-                  child: Row(children: [
-                    Container(width: 44, height: 44, decoration: BoxDecoration(color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.15) : AppTheme.bgMuted, borderRadius: BorderRadius.circular(12)),
-                      child: _gettingLoc
-                        ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal)))
-                        : Icon(_locationAutoFilled ? Icons.location_on_rounded : Icons.my_location_rounded, color: _locationAutoFilled ? AppTheme.teal : AppTheme.textMuted, size: 22)),
-                    const SizedBox(width: 14),
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(_locationAutoFilled ? 'Location Detected' : 'Auto-detect Location', style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700, fontSize: 14, color: _locationAutoFilled ? AppTheme.teal : AppTheme.text)),
-                      Text(
-                        _locationAutoFilled && _latitude != null
-                            ? '${_latitude!.toStringAsFixed(4)}°N, ${_longitude!.toStringAsFixed(4)}°E'
-                            : 'Uses GPS to find your city automatically',
-                        style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 11, color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.8) : AppTheme.textFaint),
-                      ),
-                    ])),
-                    if (_locationAutoFilled) const Icon(Icons.check_circle_rounded, color: AppTheme.teal, size: 20),
-                  ]),
-                ),
-              ),
-              const SizedBox(height: 16),
 
-              // Divider
-              Row(children: [
-                Expanded(child: Container(height: 1, color: AppTheme.bgMuted)),
-                const Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('OR SELECT MANUALLY', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 10, color: AppTheme.textFaint, letterSpacing: 1))),
-                Expanded(child: Container(height: 1, color: AppTheme.bgMuted)),
+                // Step indicator
+                Row(children: List.generate(4, (i) => Expanded(child: Container(
+                  height: 3, margin: EdgeInsets.only(right: i < 3 ? 4 : 0),
+                  decoration: BoxDecoration(
+                    color: i <= _step ? AppTheme.accent : AppTheme.bgMuted,
+                    borderRadius: BorderRadius.circular(2)),
+                )))),
+                const SizedBox(height: 32),
+
+                // ── Step 0: Account + OAuth ────────────────────────────────
+                if (_step == 0) ..._buildStep0(busy),
+
+                // ── Step 1: Profile ────────────────────────────────────────
+                if (_step == 1) ..._buildStep1(),
+
+                // ── Step 2: Location ───────────────────────────────────────
+                if (_step == 2) ..._buildStep2(auth),
+
+                // ── Step 3: Verify ─────────────────────────────────────────
+                if (_step == 3) ..._buildStep3(auth, busy),
               ]),
-              const SizedBox(height: 16),
-
-              // State dropdown
-              Container(
-                decoration: BoxDecoration(color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.bgMuted)),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-                  isExpanded: true,
-                  value: _selectedState,
-                  hint: const Text('Select State', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
-                  dropdownColor: AppTheme.bgElevated,
-                  style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-                  items: _sortedStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                  onChanged: (val) => setState(() { _selectedState = val; _selectedCity = null; _locationAutoFilled = false; }),
-                )),
-              ),
-              const SizedBox(height: 12),
-
-              // City dropdown
-              AnimatedOpacity(
-                opacity: _selectedState != null ? 1.0 : 0.4,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  decoration: BoxDecoration(color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(14), border: Border.all(color: _selectedCity != null ? AppTheme.accent.withOpacity(0.4) : AppTheme.bgMuted)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-                    isExpanded: true,
-                    value: _selectedCity,
-                    hint: Text(_selectedState != null ? 'Select City in $_selectedState' : 'Select State first', style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
-                    dropdownColor: AppTheme.bgElevated,
-                    style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-                    items: _citiesForState.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                    onChanged: _selectedState == null ? null : (val) => setState(() => _selectedCity = val),
-                  )),
-                ),
-              ),
-
-              // Selected location preview
-              if (_locationDisplay.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.07), borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.accent.withOpacity(0.2))),
-                  child: Row(children: [
-                    const Icon(Icons.location_on_rounded, size: 16, color: AppTheme.accent),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(_locationDisplay, style: const TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.accent))),
-                    if (_latitude != null) ...[
-                      const SizedBox(width: 8),
-                      const Icon(Icons.gps_fixed_rounded, size: 13, color: AppTheme.teal),
-                    ],
-                  ]),
-                ),
-              ],
-              const SizedBox(height: 32),
-
-              // Wake-up hint
-              if (_showWakeUpHint) ...[
-                Container(
-                  padding: const EdgeInsets.all(12), margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(color: AppTheme.amber.withOpacity(0.10), borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.amber.withOpacity(0.3))),
-                  child: const Row(children: [
-                    Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.amber), SizedBox(width: 10),
-                    Expanded(child: Text('Server is waking up — this may take up to 30s on first request.', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.amber))),
-                  ]),
-                ),
-              ],
-
-              BrutalButton(label: 'CREATE ACCOUNT', onPressed: auth.isLoading ? null : _submit, isLoading: auth.isLoading, width: double.infinity),
-              const SizedBox(height: 16),
-              Center(child: GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: RichText(text: const TextSpan(style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13), children: [
-                  TextSpan(text: 'Already have an account? ', style: TextStyle(color: AppTheme.textMuted)),
-                  TextSpan(text: 'Sign In', style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w700)),
-                ])),
-              )),
-            ],
-          ]))),
+            ),
+          ),
         ),
       ])),
     );
   }
+
+  // ── Step builders ──────────────────────────────────────────────────────────
+
+  List<Widget> _buildStep0(bool busy) => [
+    const Text('Create Account', style: TextStyle(fontFamily: 'SpaceGrotesk',
+      fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
+    const SizedBox(height: 4),
+    const Text('Step 1 of 4 · Account details', style: TextStyle(
+      fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+    const SizedBox(height: 32),
+
+    BrutalTextField(label: 'Username', controller: _usernameCtrl,
+      prefixIcon: const Icon(Icons.person_outline_rounded),
+      validator: (v) => v!.trim().length < 3 ? 'At least 3 characters' : null),
+    const SizedBox(height: 16),
+    BrutalTextField(
+      label: 'Password', controller: _passwordCtrl,
+      prefixIcon: const Icon(Icons.lock_outline_rounded),
+      obscureText: !_showPassword,
+      suffixIcon: IconButton(
+        icon: Icon(_showPassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+            color: AppTheme.textMuted),
+        onPressed: () => setState(() => _showPassword = !_showPassword)),
+      validator: (v) => v!.length < 6 ? 'At least 6 characters' : null),
+    const SizedBox(height: 32),
+    BrutalButton(label: 'NEXT', onPressed: busy ? null : _nextStep, width: double.infinity),
+    const SizedBox(height: 20),
+
+    const Row(children: [
+      Expanded(child: Divider(color: AppTheme.bgMuted)),
+      Padding(padding: EdgeInsets.symmetric(horizontal: 16),
+        child: Text('or sign up with', style: TextStyle(
+          fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textFaint))),
+      Expanded(child: Divider(color: AppTheme.bgMuted)),
+    ]),
+    const SizedBox(height: 20),
+
+    _OAuthBtn(
+      label: 'Continue with Google',
+      icon: _GoogleIcon(),
+      loading: _oauthLoading,
+      onTap: busy ? null : () => _oauthSignup('google'),
+    ),
+    const SizedBox(height: 12),
+    _OAuthBtn(
+      label: 'Continue with GitHub',
+      icon: const Icon(Icons.code_rounded, size: 20, color: Colors.white),
+      loading: _oauthLoading,
+      onTap: busy ? null : () => _oauthSignup('github'),
+    ),
+    const SizedBox(height: 24),
+
+    Center(child: GestureDetector(
+      onTap: () => Navigator.pop(context),
+      child: RichText(text: const TextSpan(style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13), children: [
+        TextSpan(text: 'Already have an account? ', style: TextStyle(color: AppTheme.textMuted)),
+        TextSpan(text: 'Sign In', style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w700)),
+      ])),
+    )),
+  ];
+
+  List<Widget> _buildStep1() => [
+    const Text('Your Profile', style: TextStyle(fontFamily: 'SpaceGrotesk',
+      fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
+    const SizedBox(height: 4),
+    const Text('Step 2 of 4 · Personal details', style: TextStyle(
+      fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+    const SizedBox(height: 32),
+    BrutalTextField(label: 'Full Name', controller: _nameCtrl,
+      prefixIcon: const Icon(Icons.badge_outlined),
+      validator: (v) => v!.trim().isEmpty ? 'Enter your name' : null),
+    const SizedBox(height: 16),
+    BrutalTextField(label: 'Phone Number', controller: _numberCtrl,
+      prefixIcon: const Icon(Icons.phone_outlined),
+      keyboardType: TextInputType.phone,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
+      validator: (v) => v!.trim().length < 10 ? 'Enter a valid 10-digit number' : null),
+    const SizedBox(height: 16),
+    BrutalTextField(label: 'Email (optional, for verification)', controller: _emailCtrl,
+      prefixIcon: const Icon(Icons.email_outlined),
+      keyboardType: TextInputType.emailAddress,
+      validator: (_) => null),
+    const SizedBox(height: 16),
+    BrutalTextField(label: 'Years of Experience', controller: _experienceCtrl,
+      prefixIcon: const Icon(Icons.work_outline_rounded),
+      keyboardType: TextInputType.number,
+      validator: (v) {
+        final n = int.tryParse(v ?? '');
+        return (n == null || n < 0) ? 'Enter a valid number' : null;
+      }),
+    const SizedBox(height: 32),
+    BrutalButton(label: 'NEXT', onPressed: _nextStep, width: double.infinity),
+  ];
+
+  List<Widget> _buildStep2(AuthProvider auth) => [
+    const Text('Your Location', style: TextStyle(fontFamily: 'SpaceGrotesk',
+      fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
+    const SizedBox(height: 4),
+    const Text('Step 3 of 4 · Helps find nearby jobs', style: TextStyle(
+      fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+    const SizedBox(height: 24),
+
+    // Auto-detect
+    GestureDetector(
+      onTap: _gettingLoc ? null : _autoDetectLocation,
+      child: Container(
+        width: double.infinity, padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: _locationAutoFilled ? LinearGradient(colors: [
+            AppTheme.teal.withOpacity(0.15), AppTheme.teal.withOpacity(0.05)]) : null,
+          color: _locationAutoFilled ? null : AppTheme.bgElevated,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _locationAutoFilled
+              ? AppTheme.teal.withOpacity(0.5) : AppTheme.bgMuted,
+              width: _locationAutoFilled ? 1.5 : 1)),
+        child: Row(children: [
+          Container(width: 44, height: 44,
+            decoration: BoxDecoration(
+              color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.15) : AppTheme.bgMuted,
+              borderRadius: BorderRadius.circular(12)),
+            child: _gettingLoc
+                ? const Center(child: SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal)))
+                : Icon(_locationAutoFilled ? Icons.location_on_rounded : Icons.my_location_rounded,
+                    color: _locationAutoFilled ? AppTheme.teal : AppTheme.textMuted, size: 22)),
+          const SizedBox(width: 14),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_locationAutoFilled ? 'Location Detected' : 'Get My Location',
+              style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
+                fontSize: 14, color: _locationAutoFilled ? AppTheme.teal : AppTheme.text)),
+            Text(_locationAutoFilled && _locationDisplay.isNotEmpty
+                ? _locationDisplay : 'Tap to auto-fill your state & city',
+              style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 11,
+                color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.8) : AppTheme.textFaint)),
+          ])),
+          if (_locationAutoFilled) const Icon(Icons.check_circle_rounded, color: AppTheme.teal, size: 20),
+        ]),
+      ),
+    ),
+    const SizedBox(height: 16),
+
+    const Row(children: [
+      Expanded(child: Divider(color: AppTheme.bgMuted)),
+      Padding(padding: EdgeInsets.symmetric(horizontal: 12),
+        child: Text('OR SELECT MANUALLY', style: TextStyle(fontFamily: 'SpaceGrotesk',
+          fontSize: 10, color: AppTheme.textFaint, letterSpacing: 1))),
+      Expanded(child: Divider(color: AppTheme.bgMuted)),
+    ]),
+    const SizedBox(height: 16),
+
+    // State dropdown
+    Container(
+      decoration: BoxDecoration(color: AppTheme.bgElevated,
+        borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.bgMuted)),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+        isExpanded: true, value: _selectedState,
+        hint: const Text('Select State', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
+        icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
+        dropdownColor: AppTheme.bgElevated,
+        style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
+        items: _sortedStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+        onChanged: (val) => setState(() { _selectedState = val; _selectedCity = null; _locationAutoFilled = false; }),
+      )),
+    ),
+    const SizedBox(height: 12),
+
+    // City dropdown
+    AnimatedOpacity(
+      opacity: _selectedState != null ? 1.0 : 0.4,
+      duration: const Duration(milliseconds: 200),
+      child: Container(
+        decoration: BoxDecoration(color: AppTheme.bgElevated,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _selectedCity != null ? AppTheme.accent.withOpacity(0.4) : AppTheme.bgMuted)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+          isExpanded: true, value: _selectedCity,
+          hint: Text(_selectedState != null ? 'Select City in $_selectedState' : 'Select State first',
+            style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
+          icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
+          dropdownColor: AppTheme.bgElevated,
+          style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
+          items: _citiesForState.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+          onChanged: _selectedState == null ? null : (val) => setState(() => _selectedCity = val),
+        )),
+      ),
+    ),
+
+    if (_locationDisplay.isNotEmpty) ...[
+      const SizedBox(height: 12),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppTheme.accent.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.accent.withOpacity(0.2))),
+        child: Row(children: [
+          const Icon(Icons.location_on_rounded, size: 16, color: AppTheme.accent),
+          const SizedBox(width: 8),
+          Expanded(child: Text(_locationDisplay, style: const TextStyle(
+            fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.accent))),
+          if (_latitude != null) const Icon(Icons.gps_fixed_rounded, size: 13, color: AppTheme.teal),
+        ]),
+      ),
+    ],
+    const SizedBox(height: 32),
+    BrutalButton(
+      label: 'NEXT', onPressed: auth.isLoading ? null : _nextStep,
+      width: double.infinity),
+  ];
+
+  List<Widget> _buildStep3(AuthProvider auth, bool busy) => [
+    const Text('Verify Identity', style: TextStyle(fontFamily: 'SpaceGrotesk',
+      fontWeight: FontWeight.w800, fontSize: 28, letterSpacing: -1, color: AppTheme.text)),
+    const SizedBox(height: 4),
+    const Text('Step 4 of 4 · OTP verification (optional)', style: TextStyle(
+      fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+    const SizedBox(height: 8),
+    Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.teal.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.teal.withOpacity(0.2))),
+      child: const Text(
+        'Verifying your phone and email builds trust with employers. You can skip and verify later.',
+        style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal)),
+    ),
+    const SizedBox(height: 28),
+
+    // ── Phone OTP ──────────────────────────────────────────────────────────
+    _VerifyCard(
+      title: 'Phone',
+      subtitle: _numberCtrl.text.isNotEmpty ? '+91 ${_numberCtrl.text}' : 'No number entered',
+      icon: Icons.phone_rounded,
+      verified: _phoneVerified,
+      otpSent: _phoneOtpSent,
+      otpCtrl: _phoneOtpCtrl,
+      sendingOtp: _sendingOtp,
+      verifyingOtp: _verifyingOtp,
+      resendCountdown: _otpResendCountdown,
+      onSend: _numberCtrl.text.length >= 10 ? _sendPhoneOtp : null,
+      onVerify: _verifyPhoneOtp,
+    ),
+    const SizedBox(height: 16),
+
+    // ── Email OTP ──────────────────────────────────────────────────────────
+    if (_emailCtrl.text.isNotEmpty)
+      _VerifyCard(
+        title: 'Email',
+        subtitle: _emailCtrl.text,
+        icon: Icons.email_rounded,
+        verified: _emailVerified,
+        otpSent: _emailOtpSent,
+        otpCtrl: _emailOtpCtrl,
+        sendingOtp: _sendingOtp,
+        verifyingOtp: _verifyingOtp,
+        resendCountdown: _otpResendCountdown,
+        onSend: _sendEmailOtp,
+        onVerify: _verifyEmailOtp,
+      ),
+
+    if (_showWakeUpHint) ...[
+      const SizedBox(height: 16),
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.amber.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.amber.withOpacity(0.3))),
+        child: const Row(children: [
+          Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.amber),
+          SizedBox(width: 10),
+          Expanded(child: Text('Server is waking up — may take up to 30s.',
+            style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.amber))),
+        ]),
+      ),
+    ],
+    const SizedBox(height: 32),
+
+    BrutalButton(
+      label: 'CREATE ACCOUNT',
+      onPressed: busy ? null : _submit,
+      isLoading: auth.isLoading,
+      width: double.infinity),
+    const SizedBox(height: 12),
+    Center(child: GestureDetector(
+      onTap: busy ? null : _submit,
+      child: const Text('Skip verification & continue',
+        style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13,
+          color: AppTheme.textMuted, decoration: TextDecoration.underline)),
+    )),
+  ];
+}
+
+// ── OTP Verify Card ────────────────────────────────────────────────────────
+class _VerifyCard extends StatelessWidget {
+  final String title, subtitle;
+  final IconData icon;
+  final bool verified, otpSent, sendingOtp, verifyingOtp;
+  final int resendCountdown;
+  final TextEditingController otpCtrl;
+  final VoidCallback? onSend, onVerify;
+
+  const _VerifyCard({
+    required this.title, required this.subtitle, required this.icon,
+    required this.verified, required this.otpSent, required this.otpCtrl,
+    required this.sendingOtp, required this.verifyingOtp,
+    required this.resendCountdown, required this.onSend, required this.onVerify,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: verified ? AppTheme.green.withOpacity(0.06) : AppTheme.bgElevated,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: verified ? AppTheme.green.withOpacity(0.3) : AppTheme.bgMuted, width: 1)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 38, height: 38,
+            decoration: BoxDecoration(
+              color: verified ? AppTheme.green.withOpacity(0.12) : AppTheme.bgMuted,
+              borderRadius: BorderRadius.circular(10)),
+            child: Icon(verified ? Icons.check_circle_rounded : icon,
+              size: 20, color: verified ? AppTheme.green : AppTheme.textMuted)),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, style: const TextStyle(fontFamily: 'SpaceGrotesk',
+              fontWeight: FontWeight.w700, fontSize: 14, color: AppTheme.text)),
+            Text(subtitle, style: const TextStyle(fontFamily: 'SpaceGrotesk',
+              fontSize: 12, color: AppTheme.textMuted)),
+          ])),
+          if (verified)
+            const Text('Verified', style: TextStyle(fontFamily: 'SpaceGrotesk',
+              fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.green))
+          else if (!otpSent)
+            GestureDetector(
+              onTap: sendingOtp ? null : onSend,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  gradient: AppTheme.accentGradient,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: AppTheme.accentShadow()),
+                child: sendingOtp
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('Send OTP', style: TextStyle(fontFamily: 'SpaceGrotesk',
+                        fontWeight: FontWeight.w700, fontSize: 12, color: Colors.white)),
+              ),
+            ),
+        ]),
+
+        if (otpSent && !verified) ...[
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(child: _OtpField(controller: otpCtrl)),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: verifyingOtp ? null : onVerify,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppTheme.teal.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.teal.withOpacity(0.3))),
+                child: verifyingOtp
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal))
+                    : const Text('Verify', style: TextStyle(fontFamily: 'SpaceGrotesk',
+                        fontWeight: FontWeight.w700, fontSize: 13, color: AppTheme.teal)),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: (resendCountdown > 0 || sendingOtp) ? null : onSend,
+            child: Text(
+              resendCountdown > 0 ? 'Resend in ${resendCountdown}s' : 'Resend OTP',
+              style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12,
+                color: resendCountdown > 0 ? AppTheme.textFaint : AppTheme.accent,
+                decoration: resendCountdown > 0 ? null : TextDecoration.underline)),
+          ),
+        ],
+      ]),
+    );
+  }
+}
+
+class _OtpField extends StatelessWidget {
+  final TextEditingController controller;
+  const _OtpField({required this.controller});
+
+  @override
+  Widget build(BuildContext context) => TextField(
+    controller: controller,
+    keyboardType: TextInputType.number,
+    maxLength: 6,
+    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+    style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 18,
+      fontWeight: FontWeight.w700, color: AppTheme.text, letterSpacing: 8),
+    decoration: InputDecoration(
+      counterText: '',
+      hintText: '······',
+      hintStyle: TextStyle(color: AppTheme.textFaint.withOpacity(0.4), letterSpacing: 8),
+      filled: true, fillColor: AppTheme.bg,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.bgMuted)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.bgMuted)),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppTheme.accent, width: 1.5)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14)),
+  );
+}
+
+// Reusable OAuth button
+class _OAuthBtn extends StatelessWidget {
+  final String label;
+  final Widget icon;
+  final VoidCallback? onTap;
+  final bool loading;
+  const _OAuthBtn({required this.label, required this.icon, this.onTap, this.loading = false});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    child: AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: onTap == null ? 0.5 : 1.0,
+      child: Container(
+        width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 15),
+        decoration: BoxDecoration(
+          color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppTheme.bgMuted, width: 1)),
+        child: loading
+            ? const Center(child: SizedBox(width: 20, height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent)))
+            : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                SizedBox(width: 20, height: 20, child: icon),
+                const SizedBox(width: 12),
+                Text(label, style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                  fontWeight: FontWeight.w600, fontSize: 14, color: AppTheme.text)),
+              ]),
+      ),
+    ),
+  );
+}
+
+class _GoogleIcon extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 20, height: 20,
+    decoration: BoxDecoration(color: const Color(0xFF4285F4), borderRadius: BorderRadius.circular(4)),
+    child: const Center(child: Text('G', style: TextStyle(color: Colors.white,
+      fontWeight: FontWeight.w700, fontSize: 12))),
+  );
 }

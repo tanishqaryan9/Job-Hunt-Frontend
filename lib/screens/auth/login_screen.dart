@@ -4,11 +4,14 @@ import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import '../../theme/app_theme.dart';
 import '../../services/auth_provider.dart';
 import '../../widgets/brutal_widgets.dart';
+import '../../screens/main_shell.dart';
 import 'signup_screen.dart';
+import 'oauth_complete_profile_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
-  @override State<LoginScreen> createState() => _LoginScreenState();
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin {
@@ -17,7 +20,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   final _passwordCtrl = TextEditingController();
   bool _showPassword = false;
   bool _oauthLoading = false;
-  // FIX: Show a "server waking up" hint when a request is taking long
   bool _showWakeUpHint = false;
 
   late AnimationController _slideCtrl;
@@ -26,7 +28,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   late Animation<double> _floatAnim;
   late Animation<double> _fadeAnim;
 
-  // Production backend URL
   static const String _backendUrl = 'https://job-posting-u2lr.onrender.com';
   static const String _callbackScheme = 'posting';
 
@@ -58,8 +59,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     if (!_formKey.currentState!.validate()) return;
     final auth = context.read<AuthProvider>();
 
-    // FIX: Show "server waking up" hint after 5 seconds if still loading
-    final wakeUpTimer = Future.delayed(const Duration(seconds: 5), () {
+    Future.delayed(const Duration(seconds: 5), () {
       if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
     });
 
@@ -74,23 +74,16 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         duration: const Duration(seconds: 6),
       ));
     }
-    await wakeUpTimer;
   }
 
-  /// Opens the backend OAuth2 flow in a browser using flutter_web_auth_2.
-  /// Spring Boot authenticates with the provider, then redirects back to
-  /// posting://oauth2callback?accessToken=...&refreshToken=...&profileId=...&appUserId=...
   Future<void> _oauthLogin(String provider) async {
     setState(() { _oauthLoading = true; _showWakeUpHint = false; });
-
-    // FIX: Show wake-up hint after 5s for OAuth too (server cold start)
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted && _oauthLoading) setState(() => _showWakeUpHint = true);
     });
 
     try {
       final authUrl = '$_backendUrl/oauth2/authorization/$provider';
-
       final result = await FlutterWebAuth2.authenticate(
         url: authUrl,
         callbackUrlScheme: _callbackScheme,
@@ -99,45 +92,49 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
       if (!mounted) return;
       setState(() => _showWakeUpHint = false);
 
-      // Parse all params from the redirect URL
       final uri = Uri.parse(result);
-      final accessToken = uri.queryParameters['accessToken'];
-      final refreshToken = uri.queryParameters['refreshToken'];
-
-      // FIX: Check for error param first — backend may redirect with ?error=...
       final errorParam = uri.queryParameters['error'];
       if (errorParam != null && errorParam.isNotEmpty) {
         throw Exception('OAuth error: $errorParam');
       }
 
+      final accessToken = uri.queryParameters['accessToken'];
+      final refreshToken = uri.queryParameters['refreshToken'];
+
       if (accessToken == null || accessToken.isEmpty ||
           refreshToken == null || refreshToken.isEmpty) {
         throw Exception('No tokens received from OAuth2 flow');
       }
-      final profileIdStr = uri.queryParameters['profileId'];
-      final appUserIdStr = uri.queryParameters['appUserId'];
-      final profileId = profileIdStr != null && profileIdStr.isNotEmpty
-          ? int.tryParse(profileIdStr)
-          : null;
-      final appUserId = appUserIdStr != null && appUserIdStr.isNotEmpty
-          ? int.tryParse(appUserIdStr)
-          : null;
+
+      final profileId = int.tryParse(uri.queryParameters['profileId'] ?? '');
+      final appUserId = int.tryParse(uri.queryParameters['appUserId'] ?? '');
 
       if (!mounted) return;
       final auth = context.read<AuthProvider>();
       final ok = await auth.loginWithOAuthTokens(
-        accessToken,
-        refreshToken,
+        accessToken, refreshToken,
         profileId: profileId,
         appUserId: appUserId,
       );
 
-      if (!ok && mounted) {
+      if (!mounted) return;
+
+      if (ok) {
+        // New OAuth user — needs to fill in phone/location/experience
+        if (auth.needsProfileCompletion) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const OAuthCompleteProfileScreen()),
+          );
+        } else {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const MainShell()),
+          );
+        }
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(auth.error ?? 'OAuth login failed'),
           backgroundColor: AppTheme.rose,
           behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 6),
         ));
       }
     } catch (e) {
@@ -146,7 +143,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
       final msg = e.toString().contains('CANCELED') || e.toString().contains('canceled')
           ? 'Sign-in cancelled'
           : e.toString().contains('OAuth error')
-              ? 'OAuth login failed: ${e.toString().replaceAll('Exception: OAuth error: ', '')}'
+              ? e.toString().replaceAll('Exception: OAuth error: ', '')
               : 'OAuth login failed. Please try again.';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(msg),
@@ -210,7 +207,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                       fontFamily: 'SpaceGrotesk', fontSize: 15, color: AppTheme.textMuted)),
                     const SizedBox(height: 40),
 
-                    // FIX: Server wake-up banner
                     if (_showWakeUpHint) ...[
                       Container(
                         width: double.infinity,
@@ -222,19 +218,13 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                           border: Border.all(color: AppTheme.teal.withOpacity(0.3), width: 1),
                         ),
                         child: const Row(children: [
-                          SizedBox(
-                            width: 16, height: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2, color: AppTheme.teal),
-                          ),
+                          SizedBox(width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal)),
                           SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'Server is waking up… this may take ~30 seconds on first use.',
-                              style: TextStyle(
-                                fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal),
-                            ),
-                          ),
+                          Expanded(child: Text(
+                            'Server is waking up… this may take ~30 seconds on first use.',
+                            style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal),
+                          )),
                         ]),
                       ),
                     ],
@@ -261,16 +251,16 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                         label: 'SIGN IN', onPressed: busy ? null : _login,
                         isLoading: auth.isLoading, width: double.infinity),
                       const SizedBox(height: 20),
+
                       const Row(children: [
                         Expanded(child: Divider(color: AppTheme.bgMuted)),
                         Padding(padding: EdgeInsets.symmetric(horizontal: 16),
-                          child: Text('or', style: TextStyle(
+                          child: Text('or continue with', style: TextStyle(
                             fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textFaint))),
                         Expanded(child: Divider(color: AppTheme.bgMuted)),
                       ]),
                       const SizedBox(height: 20),
 
-                      // ── Google OAuth2 ──────────────────────────────────
                       _OAuthButton(
                         label: 'Continue with Google',
                         icon: _GoogleIcon(),
@@ -278,8 +268,6 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                         onTap: busy ? null : () => _oauthLogin('google'),
                       ),
                       const SizedBox(height: 12),
-
-                      // ── GitHub OAuth2 ──────────────────────────────────
                       _OAuthButton(
                         label: 'Continue with GitHub',
                         icon: const Icon(Icons.code_rounded, size: 20, color: Colors.white),
@@ -287,6 +275,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                         onTap: busy ? null : () => _oauthLogin('github'),
                       ),
                       const SizedBox(height: 36),
+
                       Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                         const Text("Don't have an account? ", style: TextStyle(
                           fontFamily: 'SpaceGrotesk', fontSize: 14, color: AppTheme.textMuted)),
@@ -333,8 +322,7 @@ class _OAuthButton extends StatelessWidget {
           border: Border.all(color: AppTheme.bgMuted, width: 1),
         ),
         child: loading
-            ? const Center(child: SizedBox(
-                width: 20, height: 20,
+            ? const Center(child: SizedBox(width: 20, height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent)))
             : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 SizedBox(width: 20, height: 20, child: icon),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../widgets/brutal_widgets.dart';
@@ -53,6 +54,7 @@ class _CreateJobScreenState extends State<CreateJobScreen>
   bool    _gettingLoc  = false;
   double? _latitude;
   double? _longitude;
+  String? _resolvedAddress; // state + district from reverse geocode
 
   _PayType   _payType   = _PayType.salary;
   _PayPeriod _payPeriod = _PayPeriod.month;
@@ -115,7 +117,7 @@ class _CreateJobScreenState extends State<CreateJobScreen>
     Skill(id: -19, name: 'Packing & Loading'), Skill(id: -20, name: 'Gardening'),
   ];
 
-  // ── Location detection ──────────────────────────────────────
+  // ── Location detection + reverse geocode ───────────────────────────────
   Future<void> _getLocation() async {
     setState(() => _gettingLoc = true);
     try {
@@ -130,7 +132,7 @@ class _CreateJobScreenState extends State<CreateJobScreen>
             backgroundColor: AppTheme.amber,
             behavior: SnackBarBehavior.floating,
           ));
-          setState(() => _gettingLoc = false); // FIX: reset before return
+          setState(() => _gettingLoc = false);
         }
         return;
       }
@@ -141,9 +143,37 @@ class _CreateJobScreenState extends State<CreateJobScreen>
         _latitude  = pos.latitude;
         _longitude = pos.longitude;
       });
+
+      // Reverse geocode → auto-fill district + state in the location field
+      try {
+        final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+        if (placemarks.isNotEmpty) {
+          final p = placemarks.first;
+          // Build "District, State" — subAdministrativeArea = district, administrativeArea = state
+          final parts = <String>[
+            if (p.subAdministrativeArea?.isNotEmpty == true) p.subAdministrativeArea!,
+            if (p.administrativeArea?.isNotEmpty == true) p.administrativeArea!,
+          ];
+          final addr = parts.join(', ');
+          if (addr.isNotEmpty) {
+            setState(() {
+              _resolvedAddress = addr;
+              // Only auto-fill if user hasn't typed anything yet
+              if (_locationCtrl.text.trim().isEmpty) {
+                _locationCtrl.text = addr;
+              }
+            });
+          }
+        }
+      } catch (_) {
+        // Geocoding failed — GPS coords still captured, text field stays as-is
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Location captured: ${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}'),
+          content: Text(_resolvedAddress != null
+              ? 'Location set: $_resolvedAddress'
+              : 'GPS captured (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})'),
           backgroundColor: AppTheme.teal,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
@@ -223,21 +253,18 @@ class _CreateJobScreenState extends State<CreateJobScreen>
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
     try {
-      final annualSalary = _payPeriod.toAnnual(
-          double.tryParse(_salaryCtrl.text.replaceAll(',', '')) ?? 0);
-
-      // createJob() in api_service auto-injects createdByUserId and remaps jobType→job_type
+      final rawSalary = double.tryParse(_salaryCtrl.text.replaceAll(',', '')) ?? 0;
       final createdJob = await apiService.createJob({
-        'title':       _titleCtrl.text.trim(),
-        'description': _descCtrl.text.trim(),
-        'location':    _locationCtrl.text.trim(),
-        'salary':      annualSalary,
-        'jobType':     _jobType,
+        'title':        _titleCtrl.text.trim(),
+        'description':  _descCtrl.text.trim(),
+        'location':     _locationCtrl.text.trim(),
+        'salary':       rawSalary,
+        'salaryPeriod': _payPeriod.name,
+        'jobType':      _jobType,
         if (_latitude  != null) 'latitude':  _latitude,
         if (_longitude != null) 'longitude': _longitude,
       });
 
-      // Skills must be linked after creation via POST /jobs/{id}/skills/{skillId}
       final realSkillIds = _selected.map((s) => s.id).where((id) => id > 0).toList();
       for (final skillId in realSkillIds) {
         try { await apiService.addSkillToJob(createdJob.id, skillId); } catch (_) {}
@@ -349,40 +376,38 @@ class _CreateJobScreenState extends State<CreateJobScreen>
               const SizedBox(height: 20),
 
               // Location + Get Location button
-              Row(
-                children: [
-                  const _SectionLabel('Work Location'),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: _gettingLoc ? null : _getLocation,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: _latitude != null ? AppTheme.teal.withOpacity(0.12) : AppTheme.accent.withOpacity(0.10),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _latitude != null ? AppTheme.teal.withOpacity(0.4) : AppTheme.accent.withOpacity(0.3)),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        _gettingLoc
-                            ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent))
-                            : Icon(
-                                _latitude != null ? Icons.location_on_rounded : Icons.my_location_rounded,
-                                size: 13,
-                                color: _latitude != null ? AppTheme.teal : AppTheme.accent,
-                              ),
-                        const SizedBox(width: 4),
-                        Text(
-                          _latitude != null ? 'Location Set ✓' : 'Get Location',
-                          style: TextStyle(
-                            fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600, fontSize: 11,
-                            color: _latitude != null ? AppTheme.teal : AppTheme.accent,
-                          ),
-                        ),
-                      ]),
+              Row(children: [
+                const _SectionLabel('Work Location'),
+                const Spacer(),
+                GestureDetector(
+                  onTap: _gettingLoc ? null : _getLocation,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: _latitude != null ? AppTheme.teal.withOpacity(0.12) : AppTheme.accent.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _latitude != null ? AppTheme.teal.withOpacity(0.4) : AppTheme.accent.withOpacity(0.3)),
                     ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      _gettingLoc
+                          ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent))
+                          : Icon(
+                              _latitude != null ? Icons.location_on_rounded : Icons.my_location_rounded,
+                              size: 13,
+                              color: _latitude != null ? AppTheme.teal : AppTheme.accent,
+                            ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _latitude != null ? 'Location Set ✓' : 'Get Location',
+                        style: TextStyle(
+                          fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600, fontSize: 11,
+                          color: _latitude != null ? AppTheme.teal : AppTheme.accent,
+                        ),
+                      ),
+                    ]),
                   ),
-                ],
-              ),
+                ),
+              ]),
               const SizedBox(height: 8),
               BrutalTextField(
                 label: 'e.g. Andheri West, Mumbai',
@@ -402,10 +427,12 @@ class _CreateJobScreenState extends State<CreateJobScreen>
                   child: Row(children: [
                     const Icon(Icons.gps_fixed_rounded, size: 13, color: AppTheme.teal),
                     const SizedBox(width: 8),
-                    Text(
-                      'GPS: ${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}  — enables distance-based matching',
+                    Expanded(child: Text(
+                      _resolvedAddress != null
+                          ? 'GPS set · $_resolvedAddress — enables distance-based matching'
+                          : 'GPS: ${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}  — enables distance-based matching',
                       style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 10, color: AppTheme.teal),
-                    ),
+                    )),
                   ]),
                 ),
               ],
@@ -470,6 +497,7 @@ class _CreateJobScreenState extends State<CreateJobScreen>
                   if (n == 0) return 'Amount cannot be zero';
                   return null;
                 },
+                onChanged: (_) => setState(() {}),
               ),
               if (_salaryCtrl.text.isNotEmpty) ...[
                 const SizedBox(height: 6),

@@ -40,13 +40,11 @@ class SignupRequest {
       };
 }
 
-/// Returned by /auth/login and /auth/refresh.
-/// Backend returns: { appUserId, profileId, accessToken, refreshToken }
 class AuthResponse {
   final String accessToken;
   final String refreshToken;
   final int? appUserId;
-  final int? profileId; // This is the User (profile) ID used in /users/{id} endpoints
+  final int? profileId;
 
   AuthResponse({
     required this.accessToken,
@@ -62,11 +60,6 @@ class AuthResponse {
         profileId: json['profileId'] as int?,
       );
 
-  // BUG FIX: Added profileId and appUserId parameters.
-  // The backend's OAuth2SuccessHandler encodes both IDs into the deep-link URL
-  // (posting://oauth2callback?accessToken=...&refreshToken=...&profileId=...&appUserId=...).
-  // Previously these were accepted but ignored, leaving both IDs null after OAuth2
-  // login and breaking every screen that calls /users/{id}, /feed/{id}, etc.
   factory AuthResponse.fromTokens({
     required String accessToken,
     required String refreshToken,
@@ -110,7 +103,6 @@ class UserProfile {
         number: json['number'] ?? '',
         location: json['location'] ?? '',
         experience: json['experience'] ?? 0,
-        // Backend sends "profile_photo" (snake_case)
         profilePhoto: json['profile_photo'],
         latitude: json['latitude']?.toDouble(),
         longitude: json['longitude']?.toDouble(),
@@ -164,6 +156,8 @@ class Job {
   final String description;
   final String location;
   final double salary;
+  /// "hour" | "day" | "month" | "year"
+  final String? salaryPeriod;
   final String jobType;
   final String? createdByName;
   final int? createdById;
@@ -179,6 +173,7 @@ class Job {
     required this.description,
     required this.location,
     required this.salary,
+    this.salaryPeriod,
     required this.jobType,
     this.createdByName,
     this.createdById,
@@ -195,21 +190,46 @@ class Job {
         description: json['description'] ?? '',
         location: json['location'] ?? '',
         salary: (json['salary'] ?? 0).toDouble(),
-        // Backend sends "jobType" (via @JsonProperty) — fallback to legacy keys
+        salaryPeriod: json['salaryPeriod']?.toString(),
         jobType: json['jobType'] ?? json['job_type'] ?? 'FULL_TIME',
         createdByName: json['createdBy']?['name'],
         createdById: (json['createdBy'] as Map<String, dynamic>?)?['id'] as int?,
         latitude: json['latitude']?.toDouble(),
         longitude: json['longitude']?.toDouble(),
-        // Backend sends "skills" (via @JsonProperty on requiredSkills)
         skills: (json['skills'] as List<dynamic>?)
                 ?.map((s) => Skill.fromJson(s))
                 .toList() ??
             [],
-        // Backend sends "createdAt" (via @JsonProperty) — fallback to snake_case
         createdAt: json['createdAt']?.toString() ?? json['created_at']?.toString(),
         distanceKm: json['distanceKm']?.toDouble(),
       );
+
+  /// FIX: No ₹ prefix — the currency_rupee icon next to this text provides the symbol.
+  /// Avoids double-rupee (icon + ₹ in text) everywhere.
+  String get salaryDisplay {
+    if (salary <= 0) return '0';
+    final period = salaryPeriod?.toLowerCase();
+    if (period == 'hour')  return '${_fmt(salary)}/hr';
+    if (period == 'day')   return '${_fmt(salary)}/day';
+    if (period == 'month') return '${_fmt(salary)}/mo';
+    if (period == 'year')  return '${_fmt(salary)}/yr';
+    // Legacy fallback: infer from magnitude
+    if (salary < 1000)     return '${salary.round()}/hr';
+    if (salary <= 50000)   return '${_fmt(salary)}/mo';
+    return '${_fmt(salary)}/yr';
+  }
+
+  /// Full display string with ₹ — use where there is no rupee icon nearby
+  String get salaryFull => '₹${salaryDisplay}';
+
+  String _fmt(double v) {
+    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
+    if (v >= 100000)   return '${(v / 100000).toStringAsFixed(1)}L';
+    if (v >= 1000)     return '${(v / 1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}K';
+    return v.round().toString();
+  }
+
+  String get salaryChip => salaryDisplay;
 }
 
 class JobApplication {
@@ -219,6 +239,11 @@ class JobApplication {
   final String status;
   final String? coverLetter;
   final String? appliedAt;
+  final int? applicantId;
+  final String? applicantName;
+  final String? applicantNumber;
+  final String? applicantLocation;
+  final int? applicantExperience;
 
   JobApplication({
     required this.id,
@@ -227,18 +252,30 @@ class JobApplication {
     required this.status,
     this.coverLetter,
     this.appliedAt,
+    this.applicantId,
+    this.applicantName,
+    this.applicantNumber,
+    this.applicantLocation,
+    this.applicantExperience,
   });
 
   factory JobApplication.fromJson(Map<String, dynamic> json) => JobApplication(
         id: json['id'] ?? 0,
-        // Backend now sends flat "jobId" and "jobTitle" via @JsonProperty getters
         jobId: json['jobId'] ?? json['job']?['id'] ?? 0,
         jobTitle: json['jobTitle'] ?? json['job']?['title'] ?? 'Unknown Job',
         status: json['status'] ?? 'PENDING',
         coverLetter: json['coverLetter'],
-        // Backend sends "appliedAt" (via @JsonProperty) — fallback to snake_case
         appliedAt: json['appliedAt']?.toString() ?? json['applied_at']?.toString(),
+        applicantId: json['applicantId'] as int?,
+        applicantName: json['applicantName']?.toString(),
+        applicantNumber: json['applicantNumber']?.toString(),
+        applicantLocation: json['applicantLocation']?.toString(),
+        applicantExperience: json['applicantExperience'] as int?,
       );
+
+  String get displayName => applicantName?.isNotEmpty == true
+      ? applicantName!
+      : 'Applicant #$id';
 }
 
 class AppNotification {
@@ -256,17 +293,13 @@ class AppNotification {
     this.createdAt,
   });
 
-  /// Backward-compatible getter used throughout the UI.
   String get message => body ?? title ?? '';
-
-  /// Convenience alias so legacy `.read` references still compile.
   bool get read => isRead;
 
   factory AppNotification.fromJson(Map<String, dynamic> json) => AppNotification(
         id: json['id'] ?? 0,
         title: json['title']?.toString(),
         body: json['body']?.toString() ?? json['message']?.toString(),
-        // Backend sends "isRead" (via @JsonProperty) — fallback to Lombok's "read"
         isRead: json['isRead'] as bool? ?? json['read'] as bool? ?? false,
         createdAt: json['createdAt']?.toString() ?? json['created_at']?.toString(),
       );

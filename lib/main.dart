@@ -6,8 +6,70 @@ import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/main_shell.dart';
 
-void main() {
+// Firebase imports — only used if google-services.json is present
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  try { await Firebase.initializeApp(); } catch (_) {}
+}
+
+final FlutterLocalNotificationsPlugin _localNotifications =
+    FlutterLocalNotificationsPlugin();
+
+bool _firebaseReady = false;
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Safe Firebase init — won't crash if google-services.json is missing
+  try {
+    await Firebase.initializeApp();
+    _firebaseReady = true;
+
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    await _localNotifications.initialize(
+      const InitializationSettings(android: androidInit, iOS: iosInit),
+    );
+
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      final notification = message.notification;
+      if (notification == null) return;
+      _localNotifications.show(
+        notification.hashCode,
+        notification.title,
+        notification.body,
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'job_posting_channel',
+            'Job Alerts',
+            channelDescription: 'Notifications for job application updates',
+            importance: Importance.high,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+          ),
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        ),
+      );
+    });
+  } catch (e) {
+    // google-services.json not yet added — app runs without push notifications
+    debugPrint('Firebase not initialized: $e');
+  }
+
   runApp(
     ChangeNotifierProvider(
       create: (_) => AuthProvider(),
@@ -38,13 +100,8 @@ class _RootRouter extends StatefulWidget {
 }
 
 class _RootRouterState extends State<_RootRouter> {
-  // Starts false — splash shows first.
-  // Flips to true only AFTER tryRestoreSession() fully completes.
   bool _initialized = false;
 
-  // Called by SplashScreen when its animation finishes.
-  // Async work is done here in the State so we fully control
-  // when setState fires — avoids the VoidCallback async race condition.
   void _onSplashComplete() {
     context.read<AuthProvider>().tryRestoreSession().then((_) {
       if (mounted) setState(() => _initialized = true);
@@ -53,14 +110,12 @@ class _RootRouterState extends State<_RootRouter> {
 
   @override
   Widget build(BuildContext context) {
-    // Step 1 — show splash until session restore finishes
     if (!_initialized) {
       return SplashScreen(onComplete: _onSplashComplete);
     }
 
     final auth = context.watch<AuthProvider>();
 
-    // Step 2 — safety spinner (should be nearly instant after step 1)
     if (auth.status == AuthStatus.unknown || auth.isLoading) {
       return const Scaffold(
         backgroundColor: Color(0xFF0D0F1A),
@@ -73,7 +128,6 @@ class _RootRouterState extends State<_RootRouter> {
       );
     }
 
-    // Step 3 — route based on auth result
     return auth.isAuthenticated ? const MainShell() : const LoginScreen();
   }
 }

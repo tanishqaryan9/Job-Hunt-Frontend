@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
+import '../../services/auth_provider.dart';
 import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 
@@ -29,7 +31,17 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
   Future<void> _loadApplications() async {
     setState(() => _loading = true);
     try {
-      final apps = await apiService.getApplications();
+      final auth = context.read<AuthProvider>();
+      final userId = auth.currentUserId ?? await apiService.getProfileId();
+
+      List<JobApplication> apps;
+      if (userId != null) {
+        // Use getMyApplications which filters out jobs the user created
+        apps = await apiService.getMyApplications(userId);
+      } else {
+        apps = await apiService.getApplications();
+      }
+
       setState(() { _applications = apps; _loading = false; });
       _animCtrl.forward(from: 0);
     } catch (e) {
@@ -48,9 +60,11 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
   }
 
   List<JobApplication> get _filtered =>
-      _filterStatus == null ? _applications : _applications.where((a) => a.status == _filterStatus).toList();
+      _filterStatus == null
+          ? _applications
+          : _applications.where((a) => a.status == _filterStatus).toList();
 
-  Future<void> _deleteApplication(JobApplication app) async {
+  Future<void> _withdrawApplication(JobApplication app) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => Dialog(
@@ -62,11 +76,11 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
             boxShadow: AppTheme.cardShadow()),
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Withdraw?', style: TextStyle(fontFamily: 'SpaceGrotesk',
+            const Text('Withdraw Application?', style: TextStyle(fontFamily: 'SpaceGrotesk',
               fontWeight: FontWeight.w700, fontSize: 20, color: AppTheme.text)),
             const SizedBox(height: 8),
-            Text('Withdraw application for "${app.jobTitle}"?',
-              style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 14, color: AppTheme.textMuted)),
+            Text('Withdraw your application for "${app.jobTitle}"?\nThis cannot be undone.',
+              style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 14, color: AppTheme.textMuted, height: 1.5)),
             const SizedBox(height: 24),
             Row(children: [
               Expanded(child: BrutalButton(label: 'Cancel',
@@ -79,11 +93,30 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
         ),
       ),
     );
+
     if (confirm == true) {
       try {
         await apiService.deleteApplication(app.id);
         setState(() => _applications.removeWhere((a) => a.id == app.id));
-      } catch (_) {}
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Application withdrawn.'),
+            backgroundColor: AppTheme.textMuted,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      } catch (e) {
+        if (mounted) {
+          final msg = e.toString().contains('403')
+              ? 'You can only withdraw your own applications.'
+              : 'Failed to withdraw application. Please try again.';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(msg),
+            backgroundColor: AppTheme.rose,
+            behavior: SnackBarBehavior.floating,
+          ));
+        }
+      }
     }
   }
 
@@ -97,7 +130,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              const Expanded(child: Text('Applications', style: TextStyle(
+              const Expanded(child: Text('My Applications', style: TextStyle(
                 fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
                 fontSize: 28, letterSpacing: -1, color: AppTheme.text))),
               Container(
@@ -116,14 +149,14 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
             // Summary row
             if (!_loading && _applications.isNotEmpty) _buildSummaryRow(),
             const SizedBox(height: 16),
-            // Filter pills
+            // Filter pills — status-based only (no duplicate "All/Applied")
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(children: [
                 _FilterPill(label: 'All', selected: _filterStatus == null,
                   onTap: () => setState(() => _filterStatus = null)),
                 const SizedBox(width: 8),
-                for (final s in ['APPLIED', 'SHORTLISTED', 'HIRED', 'REJECTED', 'PENDING'])
+                for (final s in ['PENDING', 'APPLIED', 'SHORTLISTED', 'HIRED', 'REJECTED'])
                   Padding(padding: const EdgeInsets.only(right: 8),
                     child: _FilterPill(label: s, selected: _filterStatus == s,
                       onTap: () => setState(() => _filterStatus = s))),
@@ -156,7 +189,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
                                 child: Transform.translate(offset: Offset(0, 28 * (1 - t)), child: child));
                             },
                             child: Padding(padding: const EdgeInsets.only(bottom: 14),
-                              child: _ApplicationCard(app: app, onDelete: () => _deleteApplication(app))),
+                              child: _ApplicationCard(app: app, onWithdraw: () => _withdrawApplication(app))),
                           );
                         },
                       ),
@@ -172,7 +205,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
       counts[a.status] = (counts[a.status] ?? 0) + 1;
     }
     return Row(children: [
-      _SummaryDot(label: 'Active', count: (counts['APPLIED'] ?? 0) + (counts['SHORTLISTED'] ?? 0), color: AppTheme.blue),
+      _SummaryDot(label: 'Active', count: (counts['APPLIED'] ?? 0) + (counts['SHORTLISTED'] ?? 0) + (counts['PENDING'] ?? 0), color: AppTheme.blue),
       const SizedBox(width: 16),
       _SummaryDot(label: 'Hired', count: counts['HIRED'] ?? 0, color: AppTheme.green),
       const SizedBox(width: 16),
@@ -239,8 +272,8 @@ class _FilterPill extends StatelessWidget {
 
 class _ApplicationCard extends StatefulWidget {
   final JobApplication app;
-  final VoidCallback onDelete;
-  const _ApplicationCard({required this.app, required this.onDelete});
+  final VoidCallback onWithdraw;
+  const _ApplicationCard({required this.app, required this.onWithdraw});
   @override State<_ApplicationCard> createState() => _ApplicationCardState();
 }
 
@@ -270,7 +303,6 @@ class _ApplicationCardState extends State<_ApplicationCard> {
           boxShadow: AppTheme.cardShadow(),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Top status bar
           Container(height: 3,
             decoration: BoxDecoration(
               color: statusColor,
@@ -280,7 +312,6 @@ class _ApplicationCardState extends State<_ApplicationCard> {
             padding: const EdgeInsets.all(18),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // Icon avatar
                 Container(width: 44, height: 44,
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.12),
@@ -308,30 +339,31 @@ class _ApplicationCardState extends State<_ApplicationCard> {
                   const SizedBox(height: 12),
                   if (widget.app.coverLetter != null) ...[
                     const Text('Cover Letter', style: TextStyle(fontFamily: 'SpaceGrotesk',
-                      fontWeight: FontWeight.w700, fontSize: 11,
-                      letterSpacing: 0.5, color: AppTheme.textMuted)),
+                      fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 0.5, color: AppTheme.textMuted)),
                     const SizedBox(height: 6),
                     Text(widget.app.coverLetter!, style: const TextStyle(fontFamily: 'SpaceGrotesk',
                       fontSize: 13, height: 1.6, color: AppTheme.textMuted)),
                     const SizedBox(height: 14),
                   ],
-                  GestureDetector(
-                    onTap: widget.onDelete,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: AppTheme.rose.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.rose.withOpacity(0.3), width: 1),
+                  // Only allow withdraw if not already hired/rejected
+                  if (!['HIRED', 'REJECTED'].contains(widget.app.status.toUpperCase()))
+                    GestureDetector(
+                      onTap: widget.onWithdraw,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.rose.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.rose.withOpacity(0.3), width: 1),
+                        ),
+                        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.close_rounded, size: 14, color: AppTheme.rose),
+                          SizedBox(width: 6),
+                          Text('Withdraw', style: TextStyle(fontFamily: 'SpaceGrotesk',
+                            fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.rose)),
+                        ]),
                       ),
-                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.close_rounded, size: 14, color: AppTheme.rose),
-                        SizedBox(width: 6),
-                        Text('Withdraw', style: TextStyle(fontFamily: 'SpaceGrotesk',
-                          fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.rose)),
-                      ]),
                     ),
-                  ),
                 ]),
                 crossFadeState: _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
                 duration: const Duration(milliseconds: 250),

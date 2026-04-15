@@ -130,7 +130,7 @@ class _SplashScreenState extends State<SplashScreen>
                         child: Stack(
                           alignment: Alignment.center,
                           children: [
-                            // Outer orbit ring
+                            // Orbit rings
                             const _OrbitRing(radius: 105, opacity: 0.12),
                             const _OrbitRing(radius: 78,  opacity: 0.08),
 
@@ -176,7 +176,7 @@ class _SplashScreenState extends State<SplashScreen>
                               opacity: _logoFade,
                               child: Transform.scale(
                                 scale: _logoScale.value * _pulse.value,
-                                child: _CentreIcon(),
+                                child: const _CentreIcon(),
                               ),
                             ),
                           ],
@@ -315,14 +315,16 @@ class _OrbitingDot extends StatelessWidget {
   }
 }
 
-// ── Centre glass icon ──────────────────────────────────────────
+// ── Centre icon — uses actual app icon with fully rounded corners ──────────
 class _CentreIcon extends StatelessWidget {
+  const _CentreIcon();
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 96, height: 96,
+      width: 96,
+      height: 96,
       decoration: BoxDecoration(
-        gradient: AppTheme.accentGradient,
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
@@ -337,10 +339,14 @@ class _CentreIcon extends StatelessWidget {
           ),
         ],
       ),
-      child: const Icon(
-        Icons.work_rounded,
-        size: 46,
-        color: Colors.white,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: Image.asset(
+          'assets/images/icon.png',
+          width: 96,
+          height: 96,
+          fit: BoxFit.cover,
+        ),
       ),
     );
   }
