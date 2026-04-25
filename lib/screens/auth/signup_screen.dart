@@ -129,7 +129,49 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
 
   void _nextStep() {
     if (!_formKey.currentState!.validate()) return;
-    _goTo(_step + 1);
+    // FIX: When advancing from step 2 (location) to step 3 (OTP), create the
+    // account first so a JWT exists before OTP send/verify calls are made.
+    if (_step == 2) {
+      _signupThenVerify();
+    } else {
+      _goTo(_step + 1);
+    }
+  }
+
+  /// Registers the user, logs them in (JWT stored), then advances to OTP step.
+  Future<void> _signupThenVerify() async {
+    if (_locationDisplay.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Please select your state and city.'),
+        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+      return;
+    }
+    final auth = context.read<AuthProvider>();
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
+    });
+
+    final ok = await auth.signup(SignupRequest(
+      username: _usernameCtrl.text.trim(),
+      password: _passwordCtrl.text,
+      name: _nameCtrl.text.trim(),
+      number: _numberCtrl.text.trim(),
+      location: _locationDisplay,
+      experience: int.tryParse(_experienceCtrl.text) ?? 0,
+      latitude: _latitude,
+      longitude: _longitude,
+    ));
+    if (mounted) setState(() => _showWakeUpHint = false);
+
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(auth.error ?? 'Sign up failed'),
+        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4)));
+      return;
+    }
+    // Account created and JWT stored — now enter OTP step
+    _goTo(3);
   }
 
   // ── OTP helpers ────────────────────────────────────────────────────────────
@@ -147,7 +189,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     if (phone.length < 10) return;
     setState(() => _sendingOtp = true);
     try {
-      await apiService.sendOtp(type: 'phone', value: phone);
+      await apiService.sendOtp(type: 'phone', value: phone, username: _usernameCtrl.text.trim());
       setState(() { _phoneOtpSent = true; _sendingOtp = false; });
       _startResendTimer();
       if (mounted) {
@@ -174,7 +216,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     if (otp.length < 4) return;
     setState(() => _verifyingOtp = true);
     try {
-      await apiService.verifyOtp(type: 'phone', value: _numberCtrl.text.trim(), otp: otp);
+      await apiService.verifyOtp(type: 'phone', value: _numberCtrl.text.trim(), otp: otp, username: _usernameCtrl.text.trim());
       setState(() { _phoneVerified = true; _verifyingOtp = false; });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -200,7 +242,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     if (email.isEmpty) return;
     setState(() => _sendingOtp = true);
     try {
-      await apiService.sendOtp(type: 'email', value: email);
+      await apiService.sendOtp(type: 'email', value: email, username: _usernameCtrl.text.trim());
       setState(() { _emailOtpSent = true; _sendingOtp = false; });
       _startResendTimer();
       if (mounted) {
@@ -227,7 +269,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     if (otp.length < 4) return;
     setState(() => _verifyingOtp = true);
     try {
-      await apiService.verifyOtp(type: 'email', value: _emailCtrl.text.trim(), otp: otp);
+      await apiService.verifyOtp(type: 'email', value: _emailCtrl.text.trim(), otp: otp, username: _usernameCtrl.text.trim());
       setState(() { _emailVerified = true; _verifyingOtp = false; });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -263,9 +305,11 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Permission denied — please select manually.'),
           backgroundColor: AppTheme.amber, behavior: SnackBarBehavior.floating));
+        }
         return;
       }
       final pos = await Geolocator.getCurrentPosition(
@@ -316,13 +360,17 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
           return;
         }
       }
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('GPS captured — please confirm state & city below.'),
         backgroundColor: AppTheme.amber, behavior: SnackBarBehavior.floating));
+      }
     } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Could not get GPS — select manually.'),
         backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+      }
     } finally {
       if (mounted) setState(() => _gettingLoc = false);
     }
@@ -378,37 +426,10 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
+  // FIX: By the time the user reaches step 3, _signupThenVerify() has already
+  // created the account and stored the JWT. _submit() just navigates home.
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_locationDisplay.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Please select your state and city.'),
-        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
-      return;
-    }
-    final auth = context.read<AuthProvider>();
-    Future.delayed(const Duration(seconds: 5), () {
-      if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
-    });
-
-    final ok = await auth.signup(SignupRequest(
-      username: _usernameCtrl.text.trim(),
-      password: _passwordCtrl.text,
-      name: _nameCtrl.text.trim(),
-      number: _numberCtrl.text.trim(),
-      location: _locationDisplay,
-      experience: int.tryParse(_experienceCtrl.text) ?? 0,
-      latitude: _latitude,
-      longitude: _longitude,
-    ));
-    if (mounted) setState(() => _showWakeUpHint = false);
-    if (ok && mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(auth.error ?? 'Sign up failed'),
-        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 4)));
-    }
+    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   @override
@@ -497,7 +518,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
         icon: Icon(_showPassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
             color: AppTheme.textMuted),
         onPressed: () => setState(() => _showPassword = !_showPassword)),
-      validator: (v) => v!.length < 6 ? 'At least 6 characters' : null),
+      validator: (v) => v!.length < 8 ? 'At least 8 characters' : null),
     const SizedBox(height: 32),
     BrutalButton(label: 'NEXT', onPressed: busy ? null : _nextStep, width: double.infinity),
     const SizedBox(height: 20),
@@ -682,7 +703,10 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     ],
     const SizedBox(height: 32),
     BrutalButton(
-      label: 'NEXT', onPressed: auth.isLoading ? null : _nextStep,
+      label: 'NEXT',
+      // FIX: show loading while _signupThenVerify() runs
+      onPressed: auth.isLoading ? null : _nextStep,
+      isLoading: auth.isLoading,
       width: double.infinity),
   ];
 
@@ -756,7 +780,8 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     const SizedBox(height: 32),
 
     BrutalButton(
-      label: 'CREATE ACCOUNT',
+      // FIX: account is already created; this button just navigates home
+      label: 'CONTINUE',
       onPressed: busy ? null : _submit,
       isLoading: auth.isLoading,
       width: double.infinity),

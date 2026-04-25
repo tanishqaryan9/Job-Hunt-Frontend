@@ -374,7 +374,7 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
           const SizedBox(height: 16),
           // Range label
           Row(children: [
-            Text('Salary Range', style: const TextStyle(
+            const Text('Salary Range', style: TextStyle(
               fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
               fontSize: 14, color: AppTheme.text)),
             const Spacer(),

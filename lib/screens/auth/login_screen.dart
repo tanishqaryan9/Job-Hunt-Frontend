@@ -107,7 +107,10 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
       }
 
       final profileId = int.tryParse(uri.queryParameters['profileId'] ?? '');
-      final appUserId = int.tryParse(uri.queryParameters['appUserId'] ?? '');
+      final appUserId  = int.tryParse(uri.queryParameters['appUserId'] ?? '');
+      // Backend now sends the provider display name (Google name / GitHub login)
+      // so we can pre-fill the name field on the profile-completion screen.
+      final oauthName  = uri.queryParameters['oauthName'];
 
       if (!mounted) return;
       final auth = context.read<AuthProvider>();
@@ -115,6 +118,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         accessToken, refreshToken,
         profileId: profileId,
         appUserId: appUserId,
+        oauthName: oauthName?.isNotEmpty == true ? oauthName : null,
       );
 
       if (!mounted) return;

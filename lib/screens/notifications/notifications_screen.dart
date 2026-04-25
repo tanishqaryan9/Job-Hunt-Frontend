@@ -29,15 +29,22 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   void dispose() { _bellCtrl.dispose(); super.dispose(); }
 
   Future<void> _loadNotifications() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     final userId = context.read<AuthProvider>().currentUserId;
-    if (userId == null) { setState(() => _loading = false); return; }
+    if (userId == null) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
     try {
       final result = _unreadOnly
           ? await apiService.getUnreadNotifications(userId)
           : await apiService.getNotifications(userId);
+      if (!mounted) return;
       setState(() { _notifications = result; _loading = false; });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _notifications = [
@@ -48,7 +55,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         ];
       });
     }
-    _bellCtrl.forward().then((_) => _bellCtrl.reverse());
+    if (!mounted) return;
+    _bellCtrl.forward().then((_) { if (mounted) _bellCtrl.reverse(); });
   }
 
   Future<void> _markAllRead() async {

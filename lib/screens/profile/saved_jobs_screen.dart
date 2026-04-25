@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../models/models.dart';
-import '../../widgets/brutal_widgets.dart';
 import '../jobs/job_detail_screen.dart';
 import '../feed/feed_screen.dart' show FeedJobCard;
 

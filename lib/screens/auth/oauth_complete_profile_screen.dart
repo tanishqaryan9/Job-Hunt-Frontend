@@ -37,7 +37,10 @@ const Map<String, List<String>> _cities = {
 };
 
 /// Shown after an OAuth login when the user has no profile yet.
-/// Collects: name (may be pre-filled from OAuth), phone, experience, location.
+/// Calls POST /users/oauth-profile/{appUserId} — a dedicated endpoint
+/// that creates the User profile row and links it to the AppUser.
+/// This avoids the 403 that PATCH /users/{id} would give because
+/// requireOwnership() fails when getUserProfile() is null.
 class OAuthCompleteProfileScreen extends StatefulWidget {
   const OAuthCompleteProfileScreen({super.key});
   @override
@@ -46,8 +49,8 @@ class OAuthCompleteProfileScreen extends StatefulWidget {
 
 class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  final _numberCtrl = TextEditingController();
+  final _nameCtrl       = TextEditingController();
+  final _numberCtrl     = TextEditingController();
   final _experienceCtrl = TextEditingController(text: '0');
 
   String? _selectedState;
@@ -55,10 +58,25 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
   double? _latitude;
   double? _longitude;
   bool _gettingLoc = false;
-  bool _saving = false;
+  bool _saving     = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill name from the OAuth provider (Google display name / GitHub login)
+    // so the user doesn't have to type it manually.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final name = context.read<AuthProvider>().oauthName;
+      if (name != null && name.isNotEmpty && _nameCtrl.text.isEmpty) {
+        _nameCtrl.text = name;
+      }
+    });
+  }
 
   List<String> get _sortedStates => _cities.keys.toList()..sort();
-  List<String> get _citiesForState => _selectedState != null ? (_cities[_selectedState] ?? []) : [];
+  List<String> get _citiesForState =>
+      _selectedState != null ? (_cities[_selectedState] ?? []) : [];
+
   String get _locationDisplay {
     if (_selectedCity != null && _selectedState != null) return '$_selectedCity, $_selectedState';
     if (_selectedState != null) return _selectedState!;
@@ -70,16 +88,22 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
     try {
       LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return;
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return;
+      }
+
       final pos = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium));
       setState(() { _latitude = pos.latitude; _longitude = pos.longitude; });
+
       try {
         final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
         if (placemarks.isNotEmpty) {
           final p = placemarks.first;
           final detectedState = p.administrativeArea;
-          final detectedCity = p.locality?.isNotEmpty == true ? p.locality : p.subAdministrativeArea;
+          final detectedCity  = p.locality?.isNotEmpty == true
+              ? p.locality : p.subAdministrativeArea;
           if (detectedState != null) {
             final matched = _sortedStates.firstWhere(
               (s) => s.toLowerCase() == detectedState.toLowerCase(),
@@ -90,16 +114,18 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
             if (matched.isNotEmpty) {
               String? mc;
               if (detectedCity != null) {
-                final cityList = _cities[matched] ?? [];
-                final found = cityList.firstWhere(
+                final found = (_cities[matched] ?? []).firstWhere(
                   (c) => c.toLowerCase().contains(detectedCity.toLowerCase()),
                   orElse: () => '');
                 if (found.isNotEmpty) mc = found;
               }
               setState(() { _selectedState = matched; _selectedCity = mc; });
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Location: ${mc ?? detectedCity ?? 'your area'}, $matched'),
-                backgroundColor: AppTheme.teal, behavior: SnackBarBehavior.floating));
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('Location: ${mc ?? detectedCity ?? 'your area'}, $matched'),
+                  backgroundColor: AppTheme.teal,
+                  behavior: SnackBarBehavior.floating));
+              }
             }
           }
         }
@@ -115,43 +141,58 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
     if (_locationDisplay.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Please select your location.'),
-        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+        backgroundColor: AppTheme.rose,
+        behavior: SnackBarBehavior.floating));
       return;
     }
+
     setState(() => _saving = true);
     try {
-      // Create user profile via PATCH /users/{appUserId} — the backend created
-      // a skeleton AppUser during OAuth; now we attach the full User profile.
       final auth = context.read<AuthProvider>();
       final appUserId = auth.appUserId;
-      if (appUserId == null) throw Exception('No app user ID');
+      if (appUserId == null) throw Exception('No app user ID — please log in again.');
 
-      final profile = await apiService.updateUser(appUserId, {
-        'name': _nameCtrl.text.trim(),
-        'number': _numberCtrl.text.trim(),
+      // ✅ Use the dedicated endpoint — avoids 403 from requireOwnership()
+      final profile = await apiService.createOAuthProfile(appUserId, {
+        'name':       _nameCtrl.text.trim(),
+        'number':     _numberCtrl.text.trim(),
         'experience': int.tryParse(_experienceCtrl.text) ?? 0,
-        'location': _locationDisplay,
-        if (_latitude != null) 'latitude': _latitude,
+        'location':   _locationDisplay,
+        if (_latitude  != null) 'latitude':  _latitude,
         if (_longitude != null) 'longitude': _longitude,
       });
 
       if (!mounted) return;
-      auth.markProfileCompleted(profile);
+      await auth.markProfileCompleted(profile);
+
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const MainShell()), (_) => false);
+          MaterialPageRoute(builder: (_) => const MainShell()), (_) => false);
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Failed to save: ${_msg(e)}'),
-          backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating));
       }
     }
   }
 
   String _msg(dynamic e) {
-    try { return (e as dynamic).response?.data?['message']?.toString() ?? e.toString(); }
-    catch (_) { return e.toString(); }
+    try {
+      final data = (e as dynamic).response?.data;
+      return data?['message']?.toString() ?? e.toString();
+    } catch (_) {
+      return e.toString();
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _numberCtrl.dispose();
+    _experienceCtrl.dispose();
+    super.dispose();
   }
 
   @override
@@ -183,22 +224,28 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
               const SizedBox(height: 36),
 
               // Name
-              BrutalTextField(label: 'Full Name', controller: _nameCtrl,
+              BrutalTextField(
+                label: 'Full Name', controller: _nameCtrl,
                 prefixIcon: const Icon(Icons.badge_outlined),
                 validator: (v) => v!.trim().isEmpty ? 'Enter your name' : null),
               const SizedBox(height: 16),
 
               // Phone
-              BrutalTextField(label: 'Phone Number', controller: _numberCtrl,
+              BrutalTextField(
+                label: 'Phone Number', controller: _numberCtrl,
                 prefixIcon: const Icon(Icons.phone_outlined),
                 keyboardType: TextInputType.phone,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(10)],
-                validator: (v) => v!.trim().length < 10 ? 'Enter a valid 10-digit number' : null),
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(10),
+                ],
+                validator: (v) => v!.trim().length < 10
+                    ? 'Enter a valid 10-digit number' : null),
               const SizedBox(height: 16),
 
               // Experience
-              BrutalTextField(label: 'Years of Experience', controller: _experienceCtrl,
+              BrutalTextField(
+                label: 'Years of Experience', controller: _experienceCtrl,
                 prefixIcon: const Icon(Icons.work_outline_rounded),
                 keyboardType: TextInputType.number,
                 validator: (v) {
@@ -207,17 +254,21 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
                 }),
               const SizedBox(height: 24),
 
-              // Location auto-detect
+              // Auto-detect location
               GestureDetector(
                 onTap: _gettingLoc ? null : _autoDetect,
                 child: Container(
                   width: double.infinity, padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(14),
+                    color: AppTheme.bgElevated,
+                    borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: AppTheme.bgMuted)),
                   child: Row(children: [
-                    Container(width: 40, height: 40,
-                      decoration: BoxDecoration(color: AppTheme.bgMuted, borderRadius: BorderRadius.circular(10)),
+                    Container(
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(
+                        color: AppTheme.bgMuted,
+                        borderRadius: BorderRadius.circular(10)),
                       child: _gettingLoc
                           ? const Center(child: SizedBox(width: 18, height: 18,
                               child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal)))
@@ -237,8 +288,10 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
 
               // State dropdown
               Container(
-                decoration: BoxDecoration(color: AppTheme.bgElevated,
-                  borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.bgMuted)),
+                decoration: BoxDecoration(
+                  color: AppTheme.bgElevated,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.bgMuted)),
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: DropdownButtonHideUnderline(child: DropdownButton<String>(
                   isExpanded: true, value: _selectedState,
@@ -258,21 +311,29 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
                 opacity: _selectedState != null ? 1.0 : 0.4,
                 duration: const Duration(milliseconds: 200),
                 child: Container(
-                  decoration: BoxDecoration(color: AppTheme.bgElevated,
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgElevated,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _selectedCity != null
-                        ? AppTheme.accent.withOpacity(0.4) : AppTheme.bgMuted)),
+                    border: Border.all(
+                      color: _selectedCity != null
+                          ? AppTheme.accent.withOpacity(0.4)
+                          : AppTheme.bgMuted)),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   child: DropdownButtonHideUnderline(child: DropdownButton<String>(
                     isExpanded: true, value: _selectedCity,
-                    hint: Text(_selectedState != null ? 'Select City' : 'Select State first',
+                    hint: Text(
+                      _selectedState != null ? 'Select City' : 'Select State first',
                       style: const TextStyle(fontFamily: 'SpaceGrotesk',
                         color: AppTheme.textFaint, fontSize: 14)),
                     icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
                     dropdownColor: AppTheme.bgElevated,
                     style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-                    items: _citiesForState.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                    onChanged: _selectedState == null ? null : (val) => setState(() => _selectedCity = val),
+                    items: _citiesForState
+                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                        .toList(),
+                    onChanged: _selectedState == null
+                        ? null
+                        : (val) => setState(() => _selectedCity = val),
                   )),
                 ),
               ),

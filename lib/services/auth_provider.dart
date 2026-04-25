@@ -12,6 +12,7 @@ class AuthProvider extends ChangeNotifier {
   int? _appUserId;
   String? _error;
   bool _isLoading = false;
+  String? _oauthName;
 
   AuthStatus get status => _status;
   UserProfile? get currentUser => _currentUser;
@@ -20,14 +21,20 @@ class AuthProvider extends ChangeNotifier {
   String? get error => _error;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
-  bool get needsProfileCompletion =>
-      _status == AuthStatus.authenticated && _currentUserId == null;
+  String? get oauthName => _oauthName;
 
-  void markProfileCompleted(UserProfile profile) {
-    _currentUser = profile;
+
+  /// Called by OAuthCompleteProfileScreen after POST /users/oauth-profile succeeds.
+  /// Persists the new profile_id to secure storage so session restore works.
+  Future<void> markProfileCompleted(UserProfile profile) async {
+    _currentUser   = profile;
     _currentUserId = profile.id;
+    // Persist so tryRestoreSession() can reload the profile ID after app restart
+    await apiService.persistProfileId(profile.id);
     notifyListeners();
   }
+  bool get needsProfileCompletion =>
+      _status == AuthStatus.authenticated && _currentUserId == null;
 
   Future<void> tryRestoreSession() async {
     _isLoading = true;
@@ -110,6 +117,7 @@ class AuthProvider extends ChangeNotifier {
     String refreshToken, {
     int? profileId,
     int? appUserId,
+    String? oauthName,
   }) async {
     _isLoading = true;
     _error = null;
@@ -120,6 +128,7 @@ class AuthProvider extends ChangeNotifier {
         refreshToken: refreshToken,
         profileId: profileId,
         appUserId: appUserId,
+        oauthName: oauthName,
       );
       await apiService.saveTokensDirectly(auth);
       _applyAuthResponse(auth);
@@ -158,6 +167,7 @@ class AuthProvider extends ChangeNotifier {
     _currentUser = null;
     _currentUserId = null;
     _appUserId = null;
+    _oauthName = null;
     _isLoading = false;
     notifyListeners();
   }
@@ -172,6 +182,7 @@ class AuthProvider extends ChangeNotifier {
     _status = AuthStatus.authenticated;
     _appUserId = auth.appUserId;
     _currentUserId = auth.profileId;
+    _oauthName = auth.oauthName;
   }
 
   // FIX: Fetch FCM token and send it to the backend.
@@ -258,8 +269,9 @@ class AuthProvider extends ChangeNotifier {
         if (statusCode == 401) return 'Incorrect username or password.';
         if (statusCode == 409) return 'That username is already taken.';
         if (statusCode == 400) return 'Please check your inputs and try again.';
-        if (statusCode == 500)
+        if (statusCode == 500) {
           return 'Server error — please try again shortly.';
+        }
       }
     } catch (_) {}
 

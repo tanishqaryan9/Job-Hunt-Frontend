@@ -29,6 +29,7 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
   void dispose() { _animCtrl.dispose(); super.dispose(); }
 
   Future<void> _loadApplications() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final auth = context.read<AuthProvider>();
@@ -42,9 +43,11 @@ class _ApplicationsScreenState extends State<ApplicationsScreen>
         apps = await apiService.getApplications();
       }
 
+      if (!mounted) return;
       setState(() { _applications = apps; _loading = false; });
       _animCtrl.forward(from: 0);
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _applications = [

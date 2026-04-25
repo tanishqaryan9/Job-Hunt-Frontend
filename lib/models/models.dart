@@ -45,12 +45,14 @@ class AuthResponse {
   final String refreshToken;
   final int? appUserId;
   final int? profileId;
+  final String? oauthName; // populated for OAuth2 logins, null otherwise
 
   AuthResponse({
     required this.accessToken,
     required this.refreshToken,
     this.appUserId,
     this.profileId,
+    this.oauthName,
   });
 
   factory AuthResponse.fromJson(Map<String, dynamic> json) => AuthResponse(
@@ -58,6 +60,7 @@ class AuthResponse {
         refreshToken: json['refreshToken'] ?? json['refresh_token'] ?? '',
         appUserId: json['appUserId'] as int?,
         profileId: json['profileId'] as int?,
+        oauthName: json['oauthName'] as String?,
       );
 
   factory AuthResponse.fromTokens({
@@ -65,12 +68,14 @@ class AuthResponse {
     required String refreshToken,
     int? profileId,
     int? appUserId,
+    String? oauthName,
   }) =>
       AuthResponse(
         accessToken: accessToken,
         refreshToken: refreshToken,
         profileId: profileId,
         appUserId: appUserId,
+        oauthName: oauthName,
       );
 }
 
@@ -219,8 +224,7 @@ class Job {
     return '${_fmt(salary)}/yr';
   }
 
-  /// Full display string with ₹ — use where there is no rupee icon nearby
-  String get salaryFull => '₹${salaryDisplay}';
+  String get salaryFull => '₹$salaryDisplay';
 
   String _fmt(double v) {
     if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';

@@ -147,6 +147,10 @@ class ApiService {
   Future<String?> getAccessToken() => _storage.read(key: 'access_token');
   Future<String?> getRefreshToken() => _storage.read(key: 'refresh_token');
 
+  Future<void> persistProfileId(int profileId) async {
+    await _storage.write(key: 'profile_id', value: profileId.toString());
+  }
+
   Future<int?> getProfileId() async {
     final val = await _storage.read(key: 'profile_id');
     return val != null ? int.tryParse(val) : null;
@@ -180,19 +184,20 @@ class ApiService {
     await clearTokens();
   }
 
-  Future<void> sendOtp({required String type, required String value}) async {
-    await _dio.post('/auth/otp/send', data: {'type': type, 'value': value});
+  Future<void> sendOtp({required String type, required String value, required String username}) async {
+    await _dio.post('/auth/otp/send', data: {'type': type, 'value': value, 'username': username});
   }
 
   Future<void> verifyOtp({
     required String type,
     required String value,
-    required String otp,
+    required String otp, required String username,
   }) async {
     await _dio.post('/auth/otp/verify', data: {
       'type': type,
       'value': value,
       'otp': otp,
+      'username': username,
     });
   }
 
@@ -220,6 +225,15 @@ class ApiService {
 
   Future<UserProfile> updateUser(int id, Map<String, dynamic> updates) async {
     final res = await _dio.patch('/users/$id', data: updates);
+    return UserProfile.fromJson(res.data);
+  }
+
+  /// POST /users/oauth-profile/{appUserId}
+  /// Creates the User profile for a new OAuth user and links it to their AppUser.
+  /// Use this instead of updateUser() when needsProfileCompletion is true,
+  /// because PATCH /users/{id} requires an existing profile (403 otherwise).
+  Future<UserProfile> createOAuthProfile(int appUserId, Map<String, dynamic> profileData) async {
+    final res = await _dio.post('/users/oauth-profile/$appUserId', data: profileData);
     return UserProfile.fromJson(res.data);
   }
 

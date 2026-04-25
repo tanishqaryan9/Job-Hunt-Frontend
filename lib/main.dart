@@ -24,7 +24,6 @@ bool _firebaseReady = false;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Safe Firebase init — won't crash if google-services.json is missing
   try {
     await Firebase.initializeApp();
     _firebaseReady = true;

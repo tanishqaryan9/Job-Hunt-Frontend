@@ -195,7 +195,7 @@ class _SplashScreenState extends State<SplashScreen>
                               shaderCallback: (bounds) =>
                                   AppTheme.heroGradient.createShader(bounds),
                               child: const Text(
-                                'POSTING',
+                                'JOBHUNT',
                                 style: TextStyle(
                                   fontFamily: 'SpaceGrotesk',
                                   fontWeight: FontWeight.w700,
