@@ -67,7 +67,27 @@ class _JobDetailScreenState extends State<JobDetailScreen>
     Share.share(text, subject: '${job.title} — Job Opportunity');
   }
 
-  void _applyNow() => showModalBottomSheet(
+  void _applyNow() {
+    final auth = context.read<AuthProvider>();
+    if (auth.userProfile?.isVerified != true) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppTheme.bgCard,
+          title: const Text('Verification Required', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text)),
+          content: const Text('You must verify your account in the Profile section before applying for jobs.', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.accent)),
+            )
+          ],
+        ),
+      );
+      return;
+    }
+
+    showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
@@ -76,6 +96,7 @@ class _JobDetailScreenState extends State<JobDetailScreen>
             ctrl: _coverLetterCtrl,
             onApply: _submitApplication),
       );
+  }
 
   Future<void> _submitApplication() async {
     setState(() => _applying = true);

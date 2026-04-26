@@ -184,21 +184,29 @@ class ApiService {
     await clearTokens();
   }
 
-  Future<void> sendOtp({required String type, required String value, required String username}) async {
-    await _dio.post('/auth/otp/send', data: {'type': type, 'value': value, 'username': username});
+  Future<void> sendOtp({required String type, required String value, String? username}) async {
+    final data = <String, dynamic>{'type': type, 'value': value};
+    if (username != null && username.isNotEmpty) {
+      data['username'] = username;
+    }
+    await _dio.post('/auth/otp/send', data: data);
   }
 
   Future<void> verifyOtp({
     required String type,
     required String value,
-    required String otp, required String username,
+    required String otp, 
+    String? username,
   }) async {
-    await _dio.post('/auth/otp/verify', data: {
+    final data = <String, dynamic>{
       'type': type,
       'value': value,
       'otp': otp,
-      'username': username,
-    });
+    };
+    if (username != null && username.isNotEmpty) {
+      data['username'] = username;
+    }
+    await _dio.post('/auth/otp/verify', data: data);
   }
 
   // ── USERS ─────────────────────────────────────────────

@@ -640,6 +640,14 @@ class _ProfileScreenState extends State<ProfileScreen>
         const Text('Account', style: TextStyle(fontFamily: 'SpaceGrotesk',
             fontWeight: FontWeight.w700, fontSize: 13, letterSpacing: 0.5, color: AppTheme.textFaint)),
         const SizedBox(height: 12),
+        if (_profile?.isVerified == false)
+          _ActionRow(
+            icon: Icons.verified_user_outlined,
+            label: 'Verify Account',
+            onTap: _verifyAccount,
+            danger: true,
+            badge: 1, // Just to show an alert style
+          ),
         _ActionRow(icon: Icons.edit_outlined, label: 'Edit Profile', onTap: _editProfile),
         // Saved Jobs
         _ActionRow(
@@ -662,6 +670,93 @@ class _ProfileScreenState extends State<ProfileScreen>
         content: Text('$title coming soon!'),
         backgroundColor: AppTheme.bgElevated,
         behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _verifyAccount() async {
+    if (_profile == null) return;
+    final emailCtrl = TextEditingController();
+    final otpCtrl = TextEditingController();
+    bool otpSent = false;
+    bool sending = false;
+    bool verifying = false;
+
+    await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return Container(
+            padding: EdgeInsets.only(left: 24, right: 24, top: 24, bottom: MediaQuery.of(context).viewInsets.bottom + 32),
+            decoration: const BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Expanded(child: Text('Verify Account', style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700, fontSize: 20, color: AppTheme.text))),
+                    GestureDetector(onTap: () => Navigator.pop(ctx), child: const Icon(Icons.close_rounded, color: AppTheme.textMuted)),
+                  ]),
+                  const SizedBox(height: 8),
+                  const Text('Verifying your email builds trust with employers.', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+                  const SizedBox(height: 24),
+                  if (!otpSent) ...[
+                    BrutalTextField(label: 'Email Address', controller: emailCtrl, prefixIcon: const Icon(Icons.email_outlined)),
+                    const SizedBox(height: 16),
+                    BrutalButton(
+                      label: 'Send OTP',
+                      isLoading: sending,
+                      width: double.infinity,
+                      onPressed: () async {
+                        if (emailCtrl.text.isEmpty) return;
+                        setModalState(() => sending = true);
+                        try {
+                          await apiService.sendOtp(type: 'EMAIL', value: emailCtrl.text.trim());
+                          setModalState(() { sending = false; otpSent = true; });
+                        } catch (e) {
+                          setModalState(() => sending = false);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to send OTP'), backgroundColor: AppTheme.rose));
+                        }
+                      },
+                    ),
+                  ] else ...[
+                    Text('Enter OTP sent to ${emailCtrl.text}', style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)),
+                    const SizedBox(height: 16),
+                    BrutalTextField(label: 'OTP', controller: otpCtrl, keyboardType: TextInputType.number),
+                    const SizedBox(height: 16),
+                    BrutalButton(
+                      label: 'Verify',
+                      isLoading: verifying,
+                      width: double.infinity,
+                      onPressed: () async {
+                        if (otpCtrl.text.isEmpty) return;
+                        setModalState(() => verifying = true);
+                        try {
+                          await apiService.verifyOtp(type: 'EMAIL', value: emailCtrl.text.trim(), otp: otpCtrl.text.trim());
+                          setModalState(() => verifying = false);
+                          Navigator.pop(ctx, true);
+                        } catch (e) {
+                          setModalState(() => verifying = false);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Incorrect OTP'), backgroundColor: AppTheme.rose));
+                        }
+                      },
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ).then((success) {
+      if (success == true) {
+        setState(() {
+          _profile = _profile?.copyWith(isVerified: true);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account Verified!'), backgroundColor: AppTheme.green));
+      }
+    });
   }
 
   Future<void> _showAddSkillSheet() async {

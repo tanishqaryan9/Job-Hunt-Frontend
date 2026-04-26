@@ -71,13 +71,10 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   bool _oauthLoading = false;
 
   // OTP state
-  bool _phoneOtpSent = false;
-  bool _phoneVerified = false;
   bool _emailOtpSent = false;
   bool _emailVerified = false;
   bool _sendingOtp = false;
   bool _verifyingOtp = false;
-  final _phoneOtpCtrl = TextEditingController();
   final _emailOtpCtrl = TextEditingController();
   int _otpResendCountdown = 0;
   Timer? _resendTimer;
@@ -117,7 +114,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     _stepCtrl.dispose();
     _resendTimer?.cancel();
     for (final c in [_usernameCtrl, _passwordCtrl, _nameCtrl, _numberCtrl,
-        _emailCtrl, _experienceCtrl, _phoneOtpCtrl, _emailOtpCtrl]) {
+        _emailCtrl, _experienceCtrl, _emailOtpCtrl]) {
       c.dispose();
     }
     super.dispose();
@@ -184,65 +181,15 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     });
   }
 
-  Future<void> _sendPhoneOtp() async {
-    final phone = _numberCtrl.text.trim();
-    if (phone.length < 10) return;
-    setState(() => _sendingOtp = true);
-    try {
-      await apiService.sendOtp(type: 'phone', value: phone, username: _usernameCtrl.text.trim());
-      setState(() { _phoneOtpSent = true; _sendingOtp = false; });
-      _startResendTimer();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('OTP sent to +91 $phone'),
-          backgroundColor: AppTheme.teal,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    } catch (e) {
-      setState(() => _sendingOtp = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to send OTP: ${_shortError(e)}'),
-          backgroundColor: AppTheme.rose,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    }
-  }
 
-  Future<void> _verifyPhoneOtp() async {
-    final otp = _phoneOtpCtrl.text.trim();
-    if (otp.length < 4) return;
-    setState(() => _verifyingOtp = true);
-    try {
-      await apiService.verifyOtp(type: 'phone', value: _numberCtrl.text.trim(), otp: otp, username: _usernameCtrl.text.trim());
-      setState(() { _phoneVerified = true; _verifyingOtp = false; });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Phone verified ✓'),
-          backgroundColor: AppTheme.green,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    } catch (e) {
-      setState(() => _verifyingOtp = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Incorrect OTP. ${_shortError(e)}'),
-          backgroundColor: AppTheme.rose,
-          behavior: SnackBarBehavior.floating,
-        ));
-      }
-    }
-  }
 
   Future<void> _sendEmailOtp() async {
     final email = _emailCtrl.text.trim();
     if (email.isEmpty) return;
     setState(() => _sendingOtp = true);
     try {
-      await apiService.sendOtp(type: 'email', value: email, username: _usernameCtrl.text.trim());
+      final un = _usernameCtrl.text.trim();
+      await apiService.sendOtp(type: 'email', value: email, username: un.isNotEmpty ? un : null);
       setState(() { _emailOtpSent = true; _sendingOtp = false; });
       _startResendTimer();
       if (mounted) {
@@ -269,7 +216,8 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     if (otp.length < 4) return;
     setState(() => _verifyingOtp = true);
     try {
-      await apiService.verifyOtp(type: 'email', value: _emailCtrl.text.trim(), otp: otp, username: _usernameCtrl.text.trim());
+      final un = _usernameCtrl.text.trim();
+      await apiService.verifyOtp(type: 'email', value: _emailCtrl.text.trim(), otp: otp, username: un.isNotEmpty ? un : null);
       setState(() { _emailVerified = true; _verifyingOtp = false; });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -646,41 +594,50 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     const SizedBox(height: 16),
 
     // State dropdown
-    Container(
-      decoration: BoxDecoration(color: AppTheme.bgElevated,
-        borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.bgMuted)),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-        isExpanded: true, value: _selectedState,
-        hint: const Text('Select State', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
-        icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
-        dropdownColor: AppTheme.bgElevated,
-        style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-        items: _sortedStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-        onChanged: (val) => setState(() { _selectedState = val; _selectedCity = null; _locationAutoFilled = false; }),
-      )),
+    AbsorbPointer(
+      absorbing: _locationAutoFilled,
+      child: Opacity(
+        opacity: _locationAutoFilled ? 0.6 : 1.0,
+        child: Container(
+          decoration: BoxDecoration(color: AppTheme.bgElevated,
+            borderRadius: BorderRadius.circular(14), border: Border.all(color: AppTheme.bgMuted)),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+            isExpanded: true, value: _selectedState,
+            hint: const Text('Select State', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
+            icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
+            dropdownColor: AppTheme.bgElevated,
+            style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
+            items: _sortedStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+            onChanged: (val) => setState(() { _selectedState = val; _selectedCity = null; _locationAutoFilled = false; }),
+          )),
+        ),
+      ),
     ),
     const SizedBox(height: 12),
 
     // City dropdown
-    AnimatedOpacity(
-      opacity: _selectedState != null ? 1.0 : 0.4,
-      duration: const Duration(milliseconds: 200),
-      child: Container(
-        decoration: BoxDecoration(color: AppTheme.bgElevated,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _selectedCity != null ? AppTheme.accent.withOpacity(0.4) : AppTheme.bgMuted)),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-          isExpanded: true, value: _selectedCity,
-          hint: Text(_selectedState != null ? 'Select City in $_selectedState' : 'Select State first',
-            style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
-          icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
-          dropdownColor: AppTheme.bgElevated,
-          style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-          items: _citiesForState.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-          onChanged: _selectedState == null ? null : (val) => setState(() => _selectedCity = val),
-        )),
+    AbsorbPointer(
+      absorbing: _locationAutoFilled,
+      child: AnimatedOpacity(
+        opacity: _locationAutoFilled ? 0.6 : (_selectedState != null ? 1.0 : 0.4),
+        duration: const Duration(milliseconds: 200),
+        child: Container(
+          decoration: BoxDecoration(color: AppTheme.bgElevated,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _selectedCity != null ? AppTheme.accent.withOpacity(0.4) : AppTheme.bgMuted)),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+            isExpanded: true, value: _selectedCity,
+            hint: Text(_selectedState != null ? 'Select City in $_selectedState' : 'Select State first',
+              style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
+            icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
+            dropdownColor: AppTheme.bgElevated,
+            style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
+            items: _citiesForState.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+            onChanged: _selectedState == null ? null : (val) => setState(() => _selectedCity = val),
+          )),
+        ),
       ),
     ),
 
@@ -724,26 +681,12 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppTheme.teal.withOpacity(0.2))),
       child: const Text(
-        'Verifying your phone and email builds trust with employers. You can skip and verify later.',
+        'Verifying your email builds trust with employers. You can skip and verify later.',
         style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal)),
     ),
     const SizedBox(height: 28),
 
-    // ── Phone OTP ──────────────────────────────────────────────────────────
-    _VerifyCard(
-      title: 'Phone',
-      subtitle: _numberCtrl.text.isNotEmpty ? '+91 ${_numberCtrl.text}' : 'No number entered',
-      icon: Icons.phone_rounded,
-      verified: _phoneVerified,
-      otpSent: _phoneOtpSent,
-      otpCtrl: _phoneOtpCtrl,
-      sendingOtp: _sendingOtp,
-      verifyingOtp: _verifyingOtp,
-      resendCountdown: _otpResendCountdown,
-      onSend: _numberCtrl.text.length >= 10 ? _sendPhoneOtp : null,
-      onVerify: _verifyPhoneOtp,
-    ),
-    const SizedBox(height: 16),
+
 
     // ── Email OTP ──────────────────────────────────────────────────────────
     if (_emailCtrl.text.isNotEmpty)

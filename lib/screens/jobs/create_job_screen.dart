@@ -3,6 +3,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
+import '../../services/auth_provider.dart';
+import 'package:provider/provider.dart';
 import '../../widgets/brutal_widgets.dart';
 import '../../models/models.dart';
 
@@ -250,6 +252,28 @@ class _CreateJobScreenState extends State<CreateJobScreen>
 
   // ── Submit ──────────────────────────────────────────────────
   Future<void> _submit() async {
+    final auth = context.read<AuthProvider>();
+    if (auth.userProfile?.isVerified != true) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppTheme.bgCard,
+          title: const Text('Verification Required', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text)),
+          content: const Text('You must verify your account in the Profile section before posting a job.', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.pop(context); // Go back to feed so they can go to profile
+              },
+              child: const Text('OK', style: TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.accent)),
+            )
+          ],
+        ),
+      );
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
     try {

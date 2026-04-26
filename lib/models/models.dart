@@ -88,6 +88,7 @@ class UserProfile {
   final String? profilePhoto;
   final double? latitude;
   final double? longitude;
+  final bool isVerified;
   final List<Skill> skills;
 
   UserProfile({
@@ -99,6 +100,7 @@ class UserProfile {
     this.profilePhoto,
     this.latitude,
     this.longitude,
+    this.isVerified = false,
     this.skills = const [],
   });
 
@@ -111,6 +113,7 @@ class UserProfile {
         profilePhoto: json['profile_photo'],
         latitude: json['latitude']?.toDouble(),
         longitude: json['longitude']?.toDouble(),
+        isVerified: json['isVerified'] ?? false,
         skills: (json['skills'] as List<dynamic>?)
                 ?.map((s) => Skill.fromJson(s))
                 .toList() ??
@@ -126,6 +129,7 @@ class UserProfile {
     String? profilePhoto,
     double? latitude,
     double? longitude,
+    bool? isVerified,
     List<Skill>? skills,
   }) =>
       UserProfile(
@@ -137,6 +141,7 @@ class UserProfile {
         profilePhoto: profilePhoto ?? this.profilePhoto,
         latitude: latitude ?? this.latitude,
         longitude: longitude ?? this.longitude,
+        isVerified: isVerified ?? this.isVerified,
         skills: skills ?? this.skills,
       );
 }
