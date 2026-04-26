@@ -36,6 +36,8 @@ class AuthProvider extends ChangeNotifier {
   bool get needsProfileCompletion =>
       _status == AuthStatus.authenticated && _currentUserId == null;
 
+  UserProfile? get userProfile => _currentUser;
+
   Future<void> tryRestoreSession() async {
     _isLoading = true;
     notifyListeners();
