@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
@@ -32,29 +33,31 @@ class _MainShellState extends State<MainShell> with SingleTickerProviderStateMix
     _initUser();
   }
 
-  /// FIX: _initUser now ensures currentUserId is set before screens render.
-  /// Previously, if profileId was null (OAuth2 login without ID in redirect),
-  /// the feed would immediately fail with "userId == null" and show nothing.
-  /// Now we load from storage first, then fetch the full profile.
   Future<void> _initUser() async {
     final auth = context.read<AuthProvider>();
     try {
-      // Prefer the in-memory value, fall back to secure storage
       int? profileId = auth.currentUserId ?? await apiService.getProfileId();
 
       if (profileId != null) {
         final profile = await apiService.getUserById(profileId);
         if (mounted) {
           auth.setCurrentUser(profile);
-          // Now load unread count — userId is guaranteed to be set
           _loadUnreadCount();
         }
       } else {
-        // userId truly unavailable — still try to load notifications gracefully
-        _loadUnreadCount();
+        // FIX: No profile_id means the session is broken — clear tokens and
+        // route back to login rather than staying in a broken shell.
+        if (mounted) await auth.forceLogout();
       }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      // FIX: 401 = expired token, refresh also failed, interceptor cleared tokens.
+      if (e.response?.statusCode == 401) {
+        await auth.forceLogout();
+        return;
+      }
+      _loadUnreadCount();
     } catch (_) {
-      // Don't crash the shell — just try unread count anyway
       _loadUnreadCount();
     }
   }

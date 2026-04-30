@@ -322,7 +322,10 @@ class _CreateJobScreenState extends State<CreateJobScreen>
       final code = (e as dynamic).response?.statusCode as int?;
       final msg  = data?['message']?.toString() ?? data?['error']?.toString();
       if (msg != null && msg.isNotEmpty) return msg;
-      if (code == 403) return "You don't have permission to post jobs.";
+      if (code == 403) {
+        if (msg != null && msg.toLowerCase().contains('verified')) return msg;
+        return "You don't have permission to post jobs.";
+      }
       if (code == 400) return 'Invalid job data. Please check all fields.';
       if (code == 401) return 'Session expired. Please log in again.';
     } catch (_) {}

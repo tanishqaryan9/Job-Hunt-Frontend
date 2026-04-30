@@ -144,6 +144,14 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       return;
     }
     final auth = context.read<AuthProvider>();
+    
+    // If already authenticated (e.g. user went back from step 3 to 2 and clicked NEXT again),
+    // skip the signup call to avoid "Username already exists" error.
+    if (auth.isAuthenticated) {
+      _goTo(3);
+      return;
+    }
+
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
     });
@@ -181,34 +189,64 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     });
   }
 
-
-
   Future<void> _sendEmailOtp() async {
     final email = _emailCtrl.text.trim();
-    if (email.isEmpty) return;
+    if (email.isEmpty) {
+      _showError('Please enter an email address first.');
+      return;
+    }
+    
+    // Basic email validation
+    if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(email)) {
+      _showError('Please enter a valid email address.');
+      return;
+    }
+
     setState(() => _sendingOtp = true);
+    
+    // Show wake-up hint if it takes too long
+    final wakeUpTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && _sendingOtp) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Server is waking up, please wait...'),
+          duration: Duration(seconds: 3),
+        ));
+      }
+    });
+
     try {
       final un = _usernameCtrl.text.trim();
-      await apiService.sendOtp(type: 'email', value: email, username: un.isNotEmpty ? un : null);
-      setState(() { _emailOtpSent = true; _sendingOtp = false; });
-      _startResendTimer();
+      await apiService.sendOtp(
+        type: 'email', 
+        value: email, 
+        username: un.isNotEmpty ? un : null
+      );
+      
+      wakeUpTimer.cancel();
       if (mounted) {
+        setState(() { _emailOtpSent = true; _sendingOtp = false; });
+        _startResendTimer();
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('OTP sent to $email'),
-          backgroundColor: AppTheme.teal,
+          backgroundColor: AppTheme.accent,
           behavior: SnackBarBehavior.floating,
         ));
       }
     } catch (e) {
-      setState(() => _sendingOtp = false);
+      wakeUpTimer.cancel();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to send OTP: ${_shortError(e)}'),
-          backgroundColor: AppTheme.rose,
-          behavior: SnackBarBehavior.floating,
-        ));
+        setState(() => _sendingOtp = false);
+        _showError('Failed to send OTP: ${_shortError(e)}');
       }
     }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: AppTheme.rose,
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   Future<void> _verifyEmailOtp() async {
@@ -220,6 +258,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       await apiService.verifyOtp(type: 'email', value: _emailCtrl.text.trim(), otp: otp, username: un.isNotEmpty ? un : null);
       setState(() { _emailVerified = true; _verifyingOtp = false; });
       if (mounted) {
+        context.read<AuthProvider>().refreshUserProfile();
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Email verified ✓'),
           backgroundColor: AppTheme.green,
@@ -227,21 +266,21 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
         ));
       }
     } catch (e) {
-      setState(() => _verifyingOtp = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Incorrect OTP. ${_shortError(e)}'),
-          backgroundColor: AppTheme.rose,
-          behavior: SnackBarBehavior.floating,
-        ));
+        setState(() => _verifyingOtp = false);
+        _showError('Verification failed: ${_shortError(e)}');
       }
     }
   }
 
   String _shortError(dynamic e) {
     try {
-      final msg = (e as dynamic).response?.data?['message']?.toString();
-      if (msg != null) return msg;
+      final data = (e as dynamic).response?.data;
+      if (data is Map) {
+        // APIError uses 'error' field — also check 'message' as fallback
+        final msg = (data['error'] ?? data['message'])?.toString();
+        if (msg != null && msg.isNotEmpty) return msg;
+      }
     } catch (_) {}
     return 'Please try again.';
   }

@@ -45,13 +45,15 @@ class AuthResponse {
   final String refreshToken;
   final int? appUserId;
   final int? profileId;
-  final String? oauthName; // populated for OAuth2 logins, null otherwise
+  final String? username;
+  final String? oauthName;
 
   AuthResponse({
     required this.accessToken,
     required this.refreshToken,
     this.appUserId,
     this.profileId,
+    this.username,
     this.oauthName,
   });
 
@@ -60,6 +62,7 @@ class AuthResponse {
         refreshToken: json['refreshToken'] ?? json['refresh_token'] ?? '',
         appUserId: json['appUserId'] as int?,
         profileId: json['profileId'] as int?,
+        username: json['username'] as String?,
         oauthName: json['oauthName'] as String?,
       );
 
@@ -68,6 +71,7 @@ class AuthResponse {
     required String refreshToken,
     int? profileId,
     int? appUserId,
+    String? username,
     String? oauthName,
   }) =>
       AuthResponse(
@@ -75,6 +79,7 @@ class AuthResponse {
         refreshToken: refreshToken,
         profileId: profileId,
         appUserId: appUserId,
+        username: username,
         oauthName: oauthName,
       );
 }
@@ -113,7 +118,7 @@ class UserProfile {
         profilePhoto: json['profile_photo'],
         latitude: json['latitude']?.toDouble(),
         longitude: json['longitude']?.toDouble(),
-        isVerified: json['isVerified'] ?? false,
+        isVerified: json['isVerified'] ?? json['verified'] ?? false,
         skills: (json['skills'] as List<dynamic>?)
                 ?.map((s) => Skill.fromJson(s))
                 .toList() ??
@@ -251,6 +256,7 @@ class JobApplication {
   final int? applicantId;
   final String? applicantName;
   final String? applicantNumber;
+  final String? applicantEmail;
   final String? applicantLocation;
   final int? applicantExperience;
 
@@ -264,6 +270,7 @@ class JobApplication {
     this.applicantId,
     this.applicantName,
     this.applicantNumber,
+    this.applicantEmail,
     this.applicantLocation,
     this.applicantExperience,
   });
@@ -278,6 +285,7 @@ class JobApplication {
         applicantId: json['applicantId'] as int?,
         applicantName: json['applicantName']?.toString(),
         applicantNumber: json['applicantNumber']?.toString(),
+        applicantEmail: json['applicantEmail']?.toString(),
         applicantLocation: json['applicantLocation']?.toString(),
         applicantExperience: json['applicantExperience'] as int?,
       );

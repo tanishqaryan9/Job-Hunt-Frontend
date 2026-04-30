@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,7 +9,7 @@ import '../../services/auth_provider.dart';
 import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 import 'saved_jobs_screen.dart';
-import 'public_profile_screen.dart';
+import 'applicant_detail_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -57,12 +58,19 @@ class _ProfileScreenState extends State<ProfileScreen>
   Future<void> _loadProfile() async {
     final auth = context.read<AuthProvider>();
     final userId = auth.currentUserId;
+
+    // FIX: If userId is null here the session was restored without a profile_id
+    // (tryRestoreSession would have caught this and set status to unauthenticated,
+    // but guard defensively in case the user navigates here via another path).
     if (userId == null) {
       setState(() => _loading = false);
+      if (mounted) await context.read<AuthProvider>().forceLogout();
       return;
     }
+
     try {
       final profile = await apiService.getUserById(userId);
+      if (!mounted) return;
       setState(() {
         _profile = profile;
         _loading = false;
@@ -70,15 +78,30 @@ class _ProfileScreenState extends State<ProfileScreen>
       auth.setCurrentUser(profile);
       _headerCtrl.forward();
       _loadMyJobs(userId);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to load profile: ${e.toString().split('\n').first}'),
-          backgroundColor: AppTheme.rose,
-          behavior: SnackBarBehavior.floating,
-        ));
+    } on DioException catch (e) {
+      if (!mounted) return;
+      // FIX: A 401 here means the token is expired and could not be refreshed.
+      // The interceptor already cleared the tokens. Log out cleanly so the
+      // router sends the user back to the login screen instead of showing a
+      // cryptic "DioException [bad response]" snackbar.
+      if (e.response?.statusCode == 401) {
+        await context.read<AuthProvider>().forceLogout();
+        return;
       }
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Failed to load profile: ${e.message ?? 'Network error'}'),
+        backgroundColor: AppTheme.rose,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Failed to load profile: ${e.toString().split('\n').first}'),
+        backgroundColor: AppTheme.rose,
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 
@@ -320,7 +343,10 @@ class _ProfileScreenState extends State<ProfileScreen>
             ]),
           )),
     );
-    if (ok == true && mounted) context.read<AuthProvider>().logout();
+    if (ok == true && mounted) {
+      await context.read<AuthProvider>().logout();
+      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    }
   }
 
   // ── Pull-to-refresh ─────────────────────────────────────────
@@ -615,12 +641,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                           ...applicants.map((app) => _ApplicantRow(
                             app: app,
                             onUpdateStatus: (status) => _updateApplicationStatus(app, status),
-                            onViewProfile: app.applicantId != null
-                                ? () => Navigator.push(context, MaterialPageRoute(
-                                    builder: (_) => PublicProfileScreen(
-                                        userId: app.applicantId!,
-                                        preloadedName: app.displayName)))
-                                : null,
+                            onTap: () => Navigator.push(context, MaterialPageRoute(
+                                builder: (_) => ApplicantDetailScreen(app: app))),
                           )),
                       ]),
                     ),
@@ -674,89 +696,29 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _verifyAccount() async {
     if (_profile == null) return;
-    final emailCtrl = TextEditingController();
-    final otpCtrl = TextEditingController();
-    bool otpSent = false;
-    bool sending = false;
-    bool verifying = false;
-
-    await showModalBottomSheet<bool>(
+    // Use a dedicated StatefulWidget instead of StatefulBuilder to avoid:
+    // 1. Context shadowing (builder's `context` param hiding outer screen context)
+    // 2. setModalState becoming stale after async gaps
+    // 3. ScaffoldMessenger using a context that has no Scaffold ancestor
+    final success = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) {
-          return Container(
-            padding: EdgeInsets.only(left: 24, right: 24, top: 24, bottom: MediaQuery.of(context).viewInsets.bottom + 32),
-            decoration: const BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    const Expanded(child: Text('Verify Account', style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700, fontSize: 20, color: AppTheme.text))),
-                    GestureDetector(onTap: () => Navigator.pop(ctx), child: const Icon(Icons.close_rounded, color: AppTheme.textMuted)),
-                  ]),
-                  const SizedBox(height: 8),
-                  const Text('Verifying your email builds trust with employers.', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
-                  const SizedBox(height: 24),
-                  if (!otpSent) ...[
-                    BrutalTextField(label: 'Email Address', controller: emailCtrl, prefixIcon: const Icon(Icons.email_outlined)),
-                    const SizedBox(height: 16),
-                    BrutalButton(
-                      label: 'Send OTP',
-                      isLoading: sending,
-                      width: double.infinity,
-                      onPressed: () async {
-                        if (emailCtrl.text.isEmpty) return;
-                        setModalState(() => sending = true);
-                        try {
-                          await apiService.sendOtp(type: 'EMAIL', value: emailCtrl.text.trim());
-                          setModalState(() { sending = false; otpSent = true; });
-                        } catch (e) {
-                          setModalState(() => sending = false);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to send OTP'), backgroundColor: AppTheme.rose));
-                        }
-                      },
-                    ),
-                  ] else ...[
-                    Text('Enter OTP sent to ${emailCtrl.text}', style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)),
-                    const SizedBox(height: 16),
-                    BrutalTextField(label: 'OTP', controller: otpCtrl, keyboardType: TextInputType.number),
-                    const SizedBox(height: 16),
-                    BrutalButton(
-                      label: 'Verify',
-                      isLoading: verifying,
-                      width: double.infinity,
-                      onPressed: () async {
-                        if (otpCtrl.text.isEmpty) return;
-                        setModalState(() => verifying = true);
-                        try {
-                          await apiService.verifyOtp(type: 'EMAIL', value: emailCtrl.text.trim(), otp: otpCtrl.text.trim());
-                          setModalState(() => verifying = false);
-                          Navigator.pop(ctx, true);
-                        } catch (e) {
-                          setModalState(() => verifying = false);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Incorrect OTP'), backgroundColor: AppTheme.rose));
-                        }
-                      },
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    ).then((success) {
-      if (success == true) {
-        setState(() {
-          _profile = _profile?.copyWith(isVerified: true);
-        });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account Verified!'), backgroundColor: AppTheme.green));
+      builder: (_) => _VerifyAccountSheet(username: context.read<AuthProvider>().username),
+    );
+
+    if (success == true && mounted) {
+      final auth = context.read<AuthProvider>();
+      await auth.refreshUserProfile();
+      if (mounted) {
+        setState(() => _profile = auth.currentUser);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Account Verified! ✓'),
+          backgroundColor: AppTheme.green,
+          behavior: SnackBarBehavior.floating,
+        ));
       }
-    });
+    }
   }
 
   Future<void> _showAddSkillSheet() async {
@@ -1113,13 +1075,13 @@ class _ActionRow extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// APPLICANT ROW — employer-only, with view profile tap
+// APPLICANT ROW — shows only name; tap opens ApplicantDetailScreen
 // ═══════════════════════════════════════════════════════════════════════════
 class _ApplicantRow extends StatelessWidget {
   final JobApplication app;
   final void Function(String status) onUpdateStatus;
-  final VoidCallback? onViewProfile;
-  const _ApplicantRow({required this.app, required this.onUpdateStatus, this.onViewProfile});
+  final VoidCallback onTap;
+  const _ApplicantRow({required this.app, required this.onUpdateStatus, required this.onTap});
 
   static const _statuses = ['PENDING', 'SHORTLISTED', 'HIRED', 'REJECTED'];
 
@@ -1135,23 +1097,22 @@ class _ApplicantRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = app.displayName;
-    final sub = [
-      if (app.applicantLocation?.isNotEmpty == true) app.applicantLocation!,
-      if (app.applicantExperience != null) '${app.applicantExperience} yr${app.applicantExperience == 1 ? "" : "s"} exp',
-      if (app.appliedAt != null) 'Applied ${app.appliedAt!.split("T").first}',
-    ].join('  ·  ');
 
     return GestureDetector(
-      onTap: onViewProfile,
+      onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(color: AppTheme.bg, borderRadius: BorderRadius.circular(10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        decoration: BoxDecoration(
+            color: AppTheme.bg,
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.bgMuted, width: 1)),
         child: Row(children: [
+          // Avatar initial
           Container(
             width: 36, height: 36,
-            decoration: BoxDecoration(color: AppTheme.accent.withOpacity(0.10),
+            decoration: BoxDecoration(
+                color: AppTheme.accent.withOpacity(0.10),
                 borderRadius: BorderRadius.circular(10)),
             child: Center(child: Text(
               name.isNotEmpty ? name[0].toUpperCase() : '?',
@@ -1159,20 +1120,17 @@ class _ApplicantRow extends StatelessWidget {
                   fontWeight: FontWeight.w800, fontSize: 15, color: AppTheme.accent))),
           ),
           const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Expanded(child: Text(name, style: const TextStyle(fontFamily: 'SpaceGrotesk',
-                  fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.text))),
-              if (onViewProfile != null)
-                const Icon(Icons.open_in_new_rounded, size: 12, color: AppTheme.textFaint),
-            ]),
-            if (app.applicantNumber?.isNotEmpty == true)
-              Text(app.applicantNumber!, style: const TextStyle(
-                  fontFamily: 'SpaceGrotesk', fontSize: 11, color: AppTheme.accent)),
-            if (sub.isNotEmpty)
-              Text(sub, style: const TextStyle(fontFamily: 'SpaceGrotesk',
-                  fontSize: 11, color: AppTheme.textFaint)),
-          ])),
+          // Name only
+          Expanded(
+            child: Text(name,
+                style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                    fontWeight: FontWeight.w600, fontSize: 13, color: AppTheme.text),
+                overflow: TextOverflow.ellipsis),
+          ),
+          // Tap hint
+          const Icon(Icons.chevron_right_rounded, size: 16, color: AppTheme.textFaint),
+          const SizedBox(width: 8),
+          // Status dropdown
           PopupMenuButton<String>(
             initialValue: app.status,
             color: AppTheme.bgCard,
@@ -1198,6 +1156,169 @@ class _ApplicantRow extends StatelessWidget {
             ),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VERIFY ACCOUNT SHEET — proper StatefulWidget to avoid StatefulBuilder pitfalls:
+//   • No context shadowing (builder param hiding outer screen context)
+//   • setState is always called on THIS widget's State, never on a stale closure
+//   • ScaffoldMessenger uses the sheet's own mounted context safely
+// ═══════════════════════════════════════════════════════════════════════════
+class _VerifyAccountSheet extends StatefulWidget {
+  final String? username;
+  const _VerifyAccountSheet({this.username});
+  @override State<_VerifyAccountSheet> createState() => _VerifyAccountSheetState();
+}
+
+class _VerifyAccountSheetState extends State<_VerifyAccountSheet> {
+  final _emailCtrl = TextEditingController();
+  final _otpCtrl   = TextEditingController();
+  bool _otpSent   = false;
+  bool _sending   = false;
+  bool _verifying = false;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _otpCtrl.dispose();
+    super.dispose();
+  }
+
+  void _showError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: AppTheme.rose,
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  // Extracts human-readable error from a DioException.
+  // The backend's APIError DTO uses the key "error", not "message".
+  String _parseError(dynamic e, String fallback) {
+    if (e is DioException) {
+      return ApiService.extractApiError(e, fallback: fallback);
+    }
+    return fallback;
+  }
+
+  Future<void> _sendOtp() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) return;
+    if (!RegExp(r'^[\w\-\.]+@([\w\-]+\.)+[\w\-]{2,4}$').hasMatch(email)) {
+      _showError('Please enter a valid email address');
+      return;
+    }
+    setState(() => _sending = true);
+    try {
+      await apiService.sendOtp(
+        type: 'EMAIL',
+        value: email,
+        username: widget.username,
+      );
+      if (!mounted) return;
+      setState(() { _sending = false; _otpSent = true; });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      _showError(_parseError(e, 'Failed to send OTP. Please try again.'));
+    }
+  }
+
+  Future<void> _verifyOtp() async {
+    final otp = _otpCtrl.text.trim();
+    if (otp.isEmpty) return;
+    setState(() => _verifying = true);
+    try {
+      await apiService.verifyOtp(
+        type: 'EMAIL',
+        value: _emailCtrl.text.trim(),
+        otp: otp,
+        username: widget.username,
+      );
+      if (!mounted) return;
+      setState(() => _verifying = false);
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _verifying = false);
+      _showError(_parseError(e, 'Incorrect OTP. Please try again.'));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+        decoration: const BoxDecoration(
+          color: AppTheme.bgCard,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Expanded(child: Text('Verify Account',
+                  style: TextStyle(fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
+                    fontSize: 20, color: AppTheme.text))),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context, false),
+                  child: const Icon(Icons.close_rounded, color: AppTheme.textMuted)),
+              ]),
+              const SizedBox(height: 8),
+              const Text('Verifying your email builds trust with employers.',
+                style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
+              const SizedBox(height: 24),
+              if (!_otpSent) ...[
+                BrutalTextField(
+                  label: 'Email Address',
+                  controller: _emailCtrl,
+                  prefixIcon: const Icon(Icons.email_outlined),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 16),
+                BrutalButton(
+                  label: 'Send OTP',
+                  isLoading: _sending,
+                  width: double.infinity,
+                  onPressed: _sending ? null : _sendOtp,
+                ),
+              ] else ...[
+                Text('Enter the code sent to ${_emailCtrl.text}',
+                  style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13,
+                    color: AppTheme.textMuted)),
+                const SizedBox(height: 16),
+                BrutalTextField(
+                  label: '6-digit code',
+                  controller: _otpCtrl,
+                  keyboardType: TextInputType.number,
+                  prefixIcon: const Icon(Icons.pin_outlined),
+                ),
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onTap: _sending ? null : () => setState(() { _otpSent = false; _otpCtrl.clear(); }),
+                  child: const Text('Wrong email? Go back',
+                    style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12,
+                      color: AppTheme.accent, decoration: TextDecoration.underline)),
+                ),
+                const SizedBox(height: 16),
+                BrutalButton(
+                  label: 'Verify',
+                  isLoading: _verifying,
+                  width: double.infinity,
+                  onPressed: _verifying ? null : _verifyOtp,
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

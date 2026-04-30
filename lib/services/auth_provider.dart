@@ -10,6 +10,7 @@ class AuthProvider extends ChangeNotifier {
   UserProfile? _currentUser;
   int? _currentUserId;
   int? _appUserId;
+  String? _username;
   String? _error;
   bool _isLoading = false;
   String? _oauthName;
@@ -18,41 +19,64 @@ class AuthProvider extends ChangeNotifier {
   UserProfile? get currentUser => _currentUser;
   int? get currentUserId => _currentUserId;
   int? get appUserId => _appUserId;
+  String? get username => _username;
   String? get error => _error;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
   String? get oauthName => _oauthName;
-
 
   /// Called by OAuthCompleteProfileScreen after POST /users/oauth-profile succeeds.
   /// Persists the new profile_id to secure storage so session restore works.
   Future<void> markProfileCompleted(UserProfile profile) async {
     _currentUser   = profile;
     _currentUserId = profile.id;
-    // Persist so tryRestoreSession() can reload the profile ID after app restart
     await apiService.persistProfileId(profile.id);
     notifyListeners();
   }
+
   bool get needsProfileCompletion =>
       _status == AuthStatus.authenticated && _currentUserId == null;
 
   UserProfile? get userProfile => _currentUser;
 
+  /// FIX: If a token exists but no profile_id is stored, the stored session is
+  /// stale/incomplete (e.g. app was killed right after login before profile_id
+  /// was written, or a previous version didn't persist it). Rather than
+  /// marking the user as authenticated and letting every screen fail with 401,
+  /// we clear the bad tokens and send them back to login so they can
+  /// re-authenticate cleanly.
   Future<void> tryRestoreSession() async {
     _isLoading = true;
     notifyListeners();
+
     final token = await apiService.getAccessToken();
     if (token != null) {
-      _currentUserId = await apiService.getProfileId();
-      _appUserId = await apiService.getAppUserId();
-      _status = AuthStatus.authenticated;
-      // FIX: Re-register FCM token on session restore (token may have rotated)
-      if (_currentUserId != null) {
-        _registerFcmToken(_currentUserId!);
+      final profileId = await apiService.getProfileId();
+      final appUserId = await apiService.getAppUserId();
+
+      if (profileId != null) {
+        // Happy path: full session is intact
+        _currentUserId = profileId;
+        _appUserId = appUserId;
+        _username = await apiService.getUsername();
+        _status = AuthStatus.authenticated;
+        _registerFcmToken(profileId);
+        // Eagerly load the full UserProfile in the background without blocking startup.
+        apiService.getUserById(profileId).then((profile) {
+          _currentUser = profile;
+          notifyListeners();
+        }).catchError((_) {
+          // Non-fatal: screens will reload the profile independently if needed
+        });
+      } else {
+        // Token exists but no profile_id — session is broken. Clear and restart.
+        await apiService.clearTokens();
+        _status = AuthStatus.unauthenticated;
       }
     } else {
       _status = AuthStatus.unauthenticated;
     }
+
     _isLoading = false;
     notifyListeners();
   }
@@ -63,6 +87,7 @@ class AuthProvider extends ChangeNotifier {
       _status = AuthStatus.authenticated;
       _currentUserId = await apiService.getProfileId();
       _appUserId = await apiService.getAppUserId();
+      _username = await apiService.getUsername();
     } else {
       _status = AuthStatus.unauthenticated;
     }
@@ -79,7 +104,6 @@ class AuthProvider extends ChangeNotifier {
       _applyAuthResponse(auth);
       _isLoading = false;
       notifyListeners();
-      // FIX: Register FCM token after successful login so push notifications work
       if (_currentUserId != null) {
         _registerFcmToken(_currentUserId!);
       }
@@ -101,7 +125,6 @@ class AuthProvider extends ChangeNotifier {
       _applyAuthResponse(auth);
       _isLoading = false;
       notifyListeners();
-      // FIX: Register FCM token after successful signup
       if (_currentUserId != null) {
         _registerFcmToken(_currentUserId!);
       }
@@ -169,8 +192,23 @@ class AuthProvider extends ChangeNotifier {
     _currentUser = null;
     _currentUserId = null;
     _appUserId = null;
+    _username = null;
     _oauthName = null;
     _isLoading = false;
+    notifyListeners();
+  }
+
+  /// FIX: Force logout — clears tokens and resets state without calling the
+  /// backend. Used when a 401 is received on a protected endpoint after a
+  /// failed token refresh, so the user is sent back to the login screen
+  /// immediately rather than seeing a raw error.
+  Future<void> forceLogout() async {
+    await apiService.clearTokens();
+    _status = AuthStatus.unauthenticated;
+    _currentUser = null;
+    _currentUserId = null;
+    _appUserId = null;
+    _oauthName = null;
     notifyListeners();
   }
 
@@ -180,19 +218,33 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshUserProfile() async {
+    try {
+      final profile = await apiService.getCurrentUser();
+      _currentUser = profile;
+      _currentUserId = profile.id;
+      notifyListeners();
+    } catch (_) {
+      if (_currentUserId != null) {
+        try {
+          final profile = await apiService.getUserById(_currentUserId!);
+          _currentUser = profile;
+          notifyListeners();
+        } catch (__) {}
+      }
+    }
+  }
+
   void _applyAuthResponse(AuthResponse auth) {
     _status = AuthStatus.authenticated;
     _appUserId = auth.appUserId;
     _currentUserId = auth.profileId;
+    _username = auth.username;
     _oauthName = auth.oauthName;
   }
 
-  // FIX: Fetch FCM token and send it to the backend.
-  // Called after every login, signup, OAuth, and session restore.
-  // Fire-and-forget — never blocks authentication flow.
   void _registerFcmToken(int userId) async {
     try {
-      // Request permission (iOS requires this; Android grants automatically)
       final messaging = FirebaseMessaging.instance;
       final settings = await messaging.requestPermission(
         alert: true,
@@ -205,7 +257,6 @@ class AuthProvider extends ChangeNotifier {
       if (token != null) {
         await apiService.registerFcmToken(userId, token);
       }
-      // Re-register when the token rotates
       messaging.onTokenRefresh.listen((newToken) {
         apiService.registerFcmToken(userId, newToken);
       });
@@ -222,8 +273,9 @@ class AuthProvider extends ChangeNotifier {
       final int? statusCode = (e as dynamic).response?.statusCode;
 
       if (response != null) {
-        final msg = response['message']?.toString() ??
-            response['error']?.toString() ??
+        // Backend APIError DTO uses 'error' key, not 'message'. Check both.
+        final msg = response['error']?.toString() ??
+            response['message']?.toString() ??
             response['detail']?.toString();
 
         if (msg != null && msg.isNotEmpty) {

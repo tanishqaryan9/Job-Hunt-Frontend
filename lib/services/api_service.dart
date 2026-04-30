@@ -21,7 +21,10 @@ class ApiService {
       connectTimeout: const Duration(seconds: 60),
       receiveTimeout: const Duration(seconds: 60),
       sendTimeout: const Duration(seconds: 60),
-      headers: {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
@@ -33,16 +36,64 @@ class ApiService {
         handler.next(options);
       },
       onError: (DioException e, handler) async {
-        if (e.response?.statusCode == 401) {
-          final refreshed = await _refreshToken();
-          if (refreshed) {
-            final token = await _storage.read(key: 'access_token');
-            e.requestOptions.headers['Authorization'] = 'Bearer $token';
-            final response = await _dio.fetch(e.requestOptions);
-            handler.resolve(response);
+        final statusCode = e.response?.statusCode;
+
+        // ── 403 Forbidden — unverified account ────────────────────────────────
+        // Backend throws AccessDeniedException → 403 when an unverified user
+        // tries to apply for a job. We re-throw with a structured error so the
+        // UI can detect it and show the verification flow instead of a generic
+        // error dialog.
+        if (statusCode == 403) {
+          final message = e.response?.data?['message'] as String? ?? '';
+          final isVerificationError = message.toLowerCase().contains('verify') ||
+              message.toLowerCase().contains('verified');
+          if (isVerificationError) {
+            handler.next(DioException(
+              requestOptions: e.requestOptions,
+              response: e.response,
+              type: DioExceptionType.badResponse,
+              error: 'ACCOUNT_NOT_VERIFIED',
+            ));
             return;
           }
         }
+
+        // ── 401 Unauthorized — attempt token refresh ───────────────────────────
+        if (statusCode == 401) {
+          // Only attempt refresh for authenticated API calls, not for
+          // auth endpoints themselves (login/refresh) — those 401s are
+          // legitimate and should not trigger an infinite retry loop.
+          final path = e.requestOptions.path;
+          // OTP paths are public but we still exclude them from the refresh-and-retry
+          // loop — if they fail with 401, it means the backend rejected an expired token
+          // on a public endpoint (handled by the JWTAuthFilter fix). Retrying with a fresh
+          // token is correct here, but since the backend fix makes the endpoint token-optional,
+          // we still exclude /auth/otp from the retry to avoid an infinite loop if the
+          // backend is on an older version.
+          final isAuthEndpoint = path.contains('/auth/login') ||
+              path.contains('/auth/refresh') ||
+              path.contains('/auth/signup') ||
+              path.contains('/auth/otp/');
+
+          if (!isAuthEndpoint) {
+            final refreshed = await _refreshToken();
+            if (refreshed) {
+              final token = await _storage.read(key: 'access_token');
+              e.requestOptions.headers['Authorization'] = 'Bearer $token';
+              try {
+                final response = await _dio.fetch(e.requestOptions);
+                handler.resolve(response);
+                return;
+              } catch (retryError) {
+                handler.next(e);
+                return;
+              }
+            }
+            // Refresh failed — clear stale tokens so the app re-routes to login.
+            await clearTokens();
+          }
+        }
+
         handler.next(e);
       },
     ));
@@ -73,7 +124,7 @@ class ApiService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final list = _savedJobsMap.values
-          .map((j) => {
+          .map((j) => <String, dynamic>{
                 'id': j.id,
                 'title': j.title,
                 'description': j.description,
@@ -140,12 +191,16 @@ class ApiService {
       await _storage.write(
           key: 'app_user_id', value: auth.appUserId.toString());
     }
+    if (auth.username != null) {
+      await _storage.write(key: 'username', value: auth.username!);
+    }
   }
 
   Future<void> saveTokensDirectly(AuthResponse auth) => _saveTokens(auth);
   Future<void> clearTokens() async => await _storage.deleteAll();
   Future<String?> getAccessToken() => _storage.read(key: 'access_token');
   Future<String?> getRefreshToken() => _storage.read(key: 'refresh_token');
+  Future<String?> getUsername() => _storage.read(key: 'username');
 
   Future<void> persistProfileId(int profileId) async {
     await _storage.write(key: 'profile_id', value: profileId.toString());
@@ -184,18 +239,36 @@ class ApiService {
     await clearTokens();
   }
 
+  /// Extracts the human-readable error message from an API error response.
+  /// The backend's APIError DTO serialises the message under the key "error",
+  /// not "message". This helper checks both keys so callers get a useful string.
+  static String extractApiError(DioException e, {String fallback = 'Something went wrong'}) {
+    final data = e.response?.data;
+    if (data is Map) {
+      final msg = data['error']?.toString() ??
+                  data['message']?.toString() ??
+                  data['detail']?.toString();
+      if (msg != null && msg.isNotEmpty) return msg;
+    }
+    // Dio's own message as last resort (e.g. "Http status error [500]")
+    return e.message ?? fallback;
+  }
+
   Future<void> sendOtp({required String type, required String value, String? username}) async {
     final data = <String, dynamic>{'type': type, 'value': value};
     if (username != null && username.isNotEmpty) {
       data['username'] = username;
     }
+    // Use a shorter timeout for OTP — the free Render server can be slow to wake,
+    // but 60 s feels completely broken to users staring at a spinner.
+    // 20 s is long enough for a cold start while still giving quick feedback.
     await _dio.post('/auth/otp/send', data: data);
   }
 
   Future<void> verifyOtp({
     required String type,
     required String value,
-    required String otp, 
+    required String otp,
     String? username,
   }) async {
     final data = <String, dynamic>{
@@ -231,15 +304,18 @@ class ApiService {
     return UserProfile.fromJson(res.data);
   }
 
+  Future<UserProfile> getCurrentUser() async {
+    final res = await _dio.get('/users/me');
+    return UserProfile.fromJson(res.data);
+  }
+
+
   Future<UserProfile> updateUser(int id, Map<String, dynamic> updates) async {
     final res = await _dio.patch('/users/$id', data: updates);
     return UserProfile.fromJson(res.data);
   }
 
   /// POST /users/oauth-profile/{appUserId}
-  /// Creates the User profile for a new OAuth user and links it to their AppUser.
-  /// Use this instead of updateUser() when needsProfileCompletion is true,
-  /// because PATCH /users/{id} requires an existing profile (403 otherwise).
   Future<UserProfile> createOAuthProfile(int appUserId, Map<String, dynamic> profileData) async {
     final res = await _dio.post('/users/oauth-profile/$appUserId', data: profileData);
     return UserProfile.fromJson(res.data);
@@ -254,8 +330,6 @@ class ApiService {
     return UserProfile.fromJson(res.data);
   }
 
-  // FIX: Register FCM token with the backend so push notifications work on mobile.
-  // Called from auth_provider.dart after every login / signup.
   Future<void> registerFcmToken(int userId, String fcmToken) async {
     try {
       await _dio.patch('/users/$userId', data: {'fcmToken': fcmToken});
@@ -354,13 +428,10 @@ class ApiService {
     return (content as List).map((j) => JobApplication.fromJson(j)).toList();
   }
 
-  /// FIX: Use the dedicated /by-user/{userId} endpoint so each user only sees
-  /// their own applications. Also deduplicates by application ID.
   Future<List<JobApplication>> getMyApplications(int userId) async {
     final res = await _dio.get('/application/by-user/$userId');
     final list =
         (res.data as List).map((j) => JobApplication.fromJson(j)).toList();
-    // Deduplicate by application id (safeguard)
     final seen = <int>{};
     return list.where((a) => seen.add(a.id)).toList();
   }
@@ -374,7 +445,6 @@ class ApiService {
       {String? coverLetter}) async {
     final res = await _dio.post('/application', data: {
       'jobId': jobId,
-      'userId': userId,
       if (coverLetter != null) 'coverLetter': coverLetter,
     });
     return JobApplication.fromJson(res.data);

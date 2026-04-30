@@ -276,12 +276,19 @@ class _JobDetailScreenState extends State<JobDetailScreen>
         if (statusCode == 404) return 'Job not found. It may have been removed.';
         if (statusCode == 409) return 'You have already applied for this job.';
         if (statusCode == 400) return 'Invalid application data. Please try again.';
-        if (statusCode == 403) return 'You are not allowed to apply for this job.';
+        if (statusCode == 403) {
+            // Backend sends the exact reason in msg (e.g. "Account must be verified")
+            // Prefer it over a generic fallback.
+            if (msg != null && msg.toLowerCase().contains('verified')) {
+              return msg;
+            }
+            return 'You are not allowed to apply for this job.';
+          }
       }
     } catch (_) {}
     if (s.contains('404')) return 'Job or user profile not found (404). Please go back and refresh.';
     if (s.contains('409')) return 'You have already applied for this job.';
-    if (s.contains('403')) return 'You are not permitted to apply for this job.';
+    if (s.contains('403')) return s.toLowerCase().contains('verified') ? 'Your account must be verified before applying. Go to Profile → Verify Account.' : 'You are not permitted to apply for this job.';
     if (s.contains('SocketException') || s.contains('Connection refused')) {
       return 'No internet connection. Please check your network and try again.';
     }
