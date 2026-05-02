@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
@@ -167,16 +168,32 @@ class ApiService {
   List<Job> getSavedJobs() => List.unmodifiable(_savedJobsMap.values.toList());
 
   // ── Token helpers ─────────────────────────────────────────────
+  Completer<bool>? _refreshCompleter;
+
   Future<bool> _refreshToken() async {
+    if (_refreshCompleter != null) return _refreshCompleter!.future;
+
+    _refreshCompleter = Completer<bool>();
     try {
       final refreshToken = await _storage.read(key: 'refresh_token');
-      if (refreshToken == null) return false;
-      final response = await _dio
-          .post('/auth/refresh', data: {'refreshToken': refreshToken});
+      if (refreshToken == null) {
+        _refreshCompleter!.complete(false);
+        _refreshCompleter = null;
+        return false;
+      }
+
+      // Use a separate Dio instance for refresh to avoid interceptor recursion
+      final refreshDio = Dio(BaseOptions(baseUrl: _prodUrl));
+      final response = await refreshDio.post('/auth/refresh', data: {'refreshToken': refreshToken});
       final auth = AuthResponse.fromJson(response.data);
       await _saveTokens(auth);
+
+      _refreshCompleter!.complete(true);
+      _refreshCompleter = null;
       return true;
     } catch (_) {
+      _refreshCompleter!.complete(false);
+      _refreshCompleter = null;
       return false;
     }
   }
@@ -345,6 +362,36 @@ class ApiService {
     await _dio.delete('/users/$userId/skills/$skillId');
   }
 
+  Future<void> deleteUser(int userId) async {
+    await _dio.delete('/users/$userId');
+  }
+
+  // Admin capabilities
+  Future<PageResponse<UserProfile>> getUsersAsAdmin({int page = 0, int size = 20}) async {
+    final res = await _dio.get('/users/admin', queryParameters: {'page': page, 'size': size});
+    final data = res.data;
+    return PageResponse<UserProfile>(
+      content: (data['content'] as List).map((j) => UserProfile.fromJson(j)).toList(),
+      page: data['number'] ?? 0,
+      size: data['size'] ?? size,
+      totalElements: data['totalElements'] ?? 0,
+      totalPages: data['totalPages'] ?? 0,
+    );
+  }
+
+  Future<void> deleteUserAsAdmin(int userId) async {
+    await _dio.delete('/users/admin/$userId');
+  }
+
+  Future<void> deleteSkillAsAdmin(int skillId) async {
+    await _dio.delete('/skills/admin/$skillId');
+  }
+
+  Future<List<Skill>> getSkills() async {
+    final res = await _dio.get('/skills');
+    return (res.data as List).map((s) => Skill.fromJson(s)).toList();
+  }
+
   Future<List<Skill>> getUserSkills(int userId) async {
     final res = await _dio.get('/users/$userId/skills');
     return (res.data as List).map((s) => Skill.fromJson(s)).toList();
@@ -390,11 +437,10 @@ class ApiService {
     if (payload.containsKey('jobType') && !payload.containsKey('job_type')) {
       payload['job_type'] = payload.remove('jobType');
     }
-    if (!payload.containsKey('createdByUserId') ||
-        payload['createdByUserId'] == null) {
-      final profileId = await getProfileId();
-      if (profileId != null) payload['createdByUserId'] = profileId;
-    }
+    // Do NOT send createdByUserId — the backend resolves the job creator from
+    // the JWT's SecurityContext automatically. AddJobRequestDto has no such
+    // field, so Jackson rejects the payload with a parse error.
+    payload.remove('createdByUserId');
     final res = await _dio.post('/jobs', data: payload);
     return Job.fromJson(res.data);
   }
@@ -532,6 +578,22 @@ class ApiService {
   Future<Skill> createSkill(String name) async {
     final res = await _dio.post('/skills', data: {'name': name});
     return Skill.fromJson(res.data);
+  }
+
+  // ── AVAILABILITY CHECK (public, no JWT) ─────────────────
+  /// Returns a map like {"usernameTaken": true/false, "phoneTaken": true/false}
+  Future<Map<String, bool>> checkAvailability({String? username, String? phone}) async {
+    final params = <String, String>{};
+    if (username != null && username.isNotEmpty) params['username'] = username;
+    if (phone != null && phone.isNotEmpty) params['phone'] = phone;
+    if (params.isEmpty) return {};
+    try {
+      final res = await _dio.get('/auth/check-availability', queryParameters: params);
+      final data = res.data as Map<String, dynamic>;
+      return data.map((k, v) => MapEntry(k, v == true));
+    } catch (_) {
+      return {};
+    }
   }
 }
 

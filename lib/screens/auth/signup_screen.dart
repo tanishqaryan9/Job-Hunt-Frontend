@@ -89,6 +89,12 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   late AnimationController _stepCtrl;
   late Animation<double> _stepFade;
 
+  // Real-time validation
+  String? _usernameError;
+  String? _phoneError;
+  Timer? _usernameDebounce;
+  Timer? _phoneDebounce;
+
   List<String> get _sortedStates => _indiaCities.keys.toList()..sort();
   List<String> get _citiesForState => _selectedState != null ? (_indiaCities[_selectedState] ?? []) : [];
 
@@ -113,6 +119,8 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   void dispose() {
     _stepCtrl.dispose();
     _resendTimer?.cancel();
+    _usernameDebounce?.cancel();
+    _phoneDebounce?.cancel();
     for (final c in [_usernameCtrl, _passwordCtrl, _nameCtrl, _numberCtrl,
         _emailCtrl, _experienceCtrl, _emailOtpCtrl]) {
       c.dispose();
@@ -126,17 +134,16 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
 
   void _nextStep() {
     if (!_formKey.currentState!.validate()) return;
-    // FIX: When advancing from step 2 (location) to step 3 (OTP), create the
-    // account first so a JWT exists before OTP send/verify calls are made.
-    if (_step == 2) {
-      _signupThenVerify();
-    } else {
+    if (_step == 0 && _emailCtrl.text.isEmpty) {
+      _emailCtrl.text = _usernameCtrl.text;
+    }
+    if (_step < 3) {
       _goTo(_step + 1);
     }
   }
 
-  /// Registers the user, logs them in (JWT stored), then advances to OTP step.
-  Future<void> _signupThenVerify() async {
+  /// Creates the account only after all signup steps are complete.
+  Future<void> _createAccount() async {
     if (_locationDisplay.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Please select your state and city.'),
@@ -144,13 +151,6 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       return;
     }
     final auth = context.read<AuthProvider>();
-    
-    // If already authenticated (e.g. user went back from step 3 to 2 and clicked NEXT again),
-    // skip the signup call to avoid "Username already exists" error.
-    if (auth.isAuthenticated) {
-      _goTo(3);
-      return;
-    }
 
     Future.delayed(const Duration(seconds: 5), () {
       if (mounted && auth.isLoading) setState(() => _showWakeUpHint = true);
@@ -175,8 +175,9 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
         duration: const Duration(seconds: 4)));
       return;
     }
-    // Account created and JWT stored — now enter OTP step
-    _goTo(3);
+    if (mounted) {
+      _submit();
+    }
   }
 
   // ── OTP helpers ────────────────────────────────────────────────────────────
@@ -283,6 +284,43 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       }
     } catch (_) {}
     return 'Please try again.';
+  }
+
+  // ── Real-time availability checks ─────────────────────────────────────────
+  void _onUsernameChanged(String value) {
+    _usernameDebounce?.cancel();
+    final trimmed = value.trim();
+    if (trimmed.length < 3) {
+      setState(() => _usernameError = null);
+      return;
+    }
+    _usernameDebounce = Timer(const Duration(milliseconds: 600), () async {
+      final result = await apiService.checkAvailability(username: trimmed);
+      if (!mounted) return;
+      setState(() {
+        _usernameError = (result['usernameTaken'] == true)
+            ? 'This email is already registered'
+            : null;
+      });
+    });
+  }
+
+  void _onPhoneChanged(String value) {
+    _phoneDebounce?.cancel();
+    final trimmed = value.trim();
+    if (trimmed.length < 10) {
+      setState(() => _phoneError = null);
+      return;
+    }
+    _phoneDebounce = Timer(const Duration(milliseconds: 600), () async {
+      final result = await apiService.checkAvailability(phone: trimmed);
+      if (!mounted) return;
+      setState(() {
+        _phoneError = (result['phoneTaken'] == true)
+            ? 'This phone number is already registered'
+            : null;
+      });
+    });
   }
 
   // ── GPS ────────────────────────────────────────────────────────────────────
@@ -413,8 +451,6 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
-  // FIX: By the time the user reaches step 3, _signupThenVerify() has already
-  // created the account and stored the JWT. _submit() just navigates home.
   Future<void> _submit() async {
     if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
   }
@@ -434,6 +470,7 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
           padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
           child: Form(
             key: _formKey,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             child: FadeTransition(
               opacity: _stepFade,
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -493,9 +530,28 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
     const SizedBox(height: 32),
 
-    BrutalTextField(label: 'Username', controller: _usernameCtrl,
-      prefixIcon: const Icon(Icons.person_outline_rounded),
-      validator: (v) => v!.trim().length < 3 ? 'At least 3 characters' : null),
+    BrutalTextField(label: 'Email Address', controller: _usernameCtrl,
+      prefixIcon: const Icon(Icons.email_outlined),
+      onChanged: _onUsernameChanged,
+      validator: (v) {
+        final value = v?.trim() ?? '';
+        if (value.isEmpty) return 'Enter your email';
+        if (!RegExp(r'^[\w.-]+@[\w.-]+\.[A-Za-z]{2,}$').hasMatch(value)) {
+          return 'Enter a valid email';
+        }
+        if (_usernameError != null) return _usernameError;
+        return null;
+      }),
+    if (_usernameError != null)
+      Padding(
+        padding: const EdgeInsets.only(top: 6, left: 4),
+        child: Row(children: [
+          const Icon(Icons.error_outline_rounded, size: 14, color: AppTheme.rose),
+          const SizedBox(width: 6),
+          Text(_usernameError!, style: const TextStyle(
+            fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.rose)),
+        ]),
+      ),
     const SizedBox(height: 16),
     BrutalTextField(
       label: 'Password', controller: _passwordCtrl,
@@ -558,12 +614,22 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
       prefixIcon: const Icon(Icons.phone_outlined),
       keyboardType: TextInputType.phone,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
-      validator: (v) => v!.trim().length < 10 ? 'Enter a valid 10-digit number' : null),
-    const SizedBox(height: 16),
-    BrutalTextField(label: 'Email (optional, for verification)', controller: _emailCtrl,
-      prefixIcon: const Icon(Icons.email_outlined),
-      keyboardType: TextInputType.emailAddress,
-      validator: (_) => null),
+      onChanged: _onPhoneChanged,
+      validator: (v) {
+        if (v!.trim().length < 10) return 'Enter a valid 10-digit number';
+        if (_phoneError != null) return _phoneError;
+        return null;
+      }),
+    if (_phoneError != null)
+      Padding(
+        padding: const EdgeInsets.only(top: 6, left: 4),
+        child: Row(children: [
+          const Icon(Icons.error_outline_rounded, size: 14, color: AppTheme.rose),
+          const SizedBox(width: 6),
+          Text(_phoneError!, style: const TextStyle(
+            fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.rose)),
+        ]),
+      ),
     const SizedBox(height: 16),
     BrutalTextField(label: 'Years of Experience', controller: _experienceCtrl,
       prefixIcon: const Icon(Icons.work_outline_rounded),
@@ -700,7 +766,6 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     const SizedBox(height: 32),
     BrutalButton(
       label: 'NEXT',
-      // FIX: show loading while _signupThenVerify() runs
       onPressed: auth.isLoading ? null : _nextStep,
       isLoading: auth.isLoading,
       width: double.infinity),
@@ -762,15 +827,14 @@ class _SignupScreenState extends State<SignupScreen> with SingleTickerProviderSt
     const SizedBox(height: 32),
 
     BrutalButton(
-      // FIX: account is already created; this button just navigates home
-      label: 'CONTINUE',
-      onPressed: busy ? null : _submit,
+      label: 'CREATE ACCOUNT',
+      onPressed: busy ? null : _createAccount,
       isLoading: auth.isLoading,
       width: double.infinity),
     const SizedBox(height: 12),
     Center(child: GestureDetector(
-      onTap: busy ? null : _submit,
-      child: const Text('Skip verification & continue',
+      onTap: busy ? null : _createAccount,
+      child: const Text('Skip verification & create account',
         style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13,
           color: AppTheme.textMuted, decoration: TextDecoration.underline)),
     )),

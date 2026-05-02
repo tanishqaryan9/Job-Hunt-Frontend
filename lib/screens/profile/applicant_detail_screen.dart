@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../theme/app_theme.dart';
 import '../../models/models.dart';
-import '../../widgets/brutal_widgets.dart';
 import 'public_profile_screen.dart';
 
 /// Full-detail screen shown when an employer taps an applicant's name.

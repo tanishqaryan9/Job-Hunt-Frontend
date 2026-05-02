@@ -235,9 +235,9 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
 
                     Form(key: _formKey, child: Column(children: [
                       BrutalTextField(
-                        label: 'Username', controller: _usernameCtrl,
-                        prefixIcon: const Icon(Icons.person_outline),
-                        validator: (v) => v!.isEmpty ? 'Enter username' : null),
+                        label: 'Email Address', controller: _usernameCtrl,
+                        prefixIcon: const Icon(Icons.email_outlined),
+                        validator: (v) => v!.isEmpty ? 'Enter email address' : null),
                       const SizedBox(height: 16),
                       BrutalTextField(
                         label: 'Password', controller: _passwordCtrl,

@@ -57,6 +57,7 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
   String? _selectedCity;
   double? _latitude;
   double? _longitude;
+  bool _locationAutoFilled = false;
   bool _gettingLoc = false;
   bool _saving     = false;
 
@@ -95,7 +96,7 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
 
       final pos = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium));
-      setState(() { _latitude = pos.latitude; _longitude = pos.longitude; });
+      setState(() { _latitude = pos.latitude; _longitude = pos.longitude; _locationAutoFilled = true; });
 
       try {
         final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
@@ -260,81 +261,98 @@ class _OAuthCompleteProfileScreenState extends State<OAuthCompleteProfileScreen>
                 child: Container(
                   width: double.infinity, padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: AppTheme.bgElevated,
+                    gradient: _locationAutoFilled ? LinearGradient(colors: [
+                      AppTheme.teal.withOpacity(0.15), AppTheme.teal.withOpacity(0.05)]) : null,
+                    color: _locationAutoFilled ? null : AppTheme.bgElevated,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.bgMuted)),
+                    border: Border.all(color: _locationAutoFilled
+                        ? AppTheme.teal.withOpacity(0.5) : AppTheme.bgMuted,
+                        width: _locationAutoFilled ? 1.5 : 1)),
                   child: Row(children: [
                     Container(
-                      width: 40, height: 40,
+                      width: 44, height: 44,
                       decoration: BoxDecoration(
-                        color: AppTheme.bgMuted,
-                        borderRadius: BorderRadius.circular(10)),
+                        color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.15) : AppTheme.bgMuted,
+                        borderRadius: BorderRadius.circular(12)),
                       child: _gettingLoc
-                          ? const Center(child: SizedBox(width: 18, height: 18,
+                          ? const Center(child: SizedBox(width: 20, height: 20,
                               child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal)))
-                          : const Icon(Icons.my_location_rounded, color: AppTheme.textMuted, size: 20)),
-                    const SizedBox(width: 12),
-                    const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('Auto-detect Location', style: TextStyle(
-                        fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w600,
-                        fontSize: 14, color: AppTheme.text)),
-                      Text('Tap to use your current location',
-                        style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 11, color: AppTheme.textFaint)),
+                          : Icon(_locationAutoFilled ? Icons.location_on_rounded : Icons.my_location_rounded,
+                              color: _locationAutoFilled ? AppTheme.teal : AppTheme.textMuted, size: 22)),
+                    const SizedBox(width: 14),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(_locationAutoFilled ? 'Location Detected' : 'Auto-detect Location', style: TextStyle(
+                        fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700,
+                        fontSize: 14, color: _locationAutoFilled ? AppTheme.teal : AppTheme.text)),
+                      Text(_locationAutoFilled && _locationDisplay.isNotEmpty
+                          ? _locationDisplay : 'Tap to use your current location',
+                        style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 11,
+                          color: _locationAutoFilled ? AppTheme.teal.withOpacity(0.8) : AppTheme.textFaint)),
                     ])),
+                    if (_locationAutoFilled) const Icon(Icons.check_circle_rounded, color: AppTheme.teal, size: 20),
                   ]),
                 ),
               ),
               const SizedBox(height: 12),
 
               // State dropdown
-              Container(
-                decoration: BoxDecoration(
-                  color: AppTheme.bgElevated,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppTheme.bgMuted)),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-                  isExpanded: true, value: _selectedState,
-                  hint: const Text('Select State', style: TextStyle(
-                    fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
-                  icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
-                  dropdownColor: AppTheme.bgElevated,
-                  style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-                  items: _sortedStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                  onChanged: (val) => setState(() { _selectedState = val; _selectedCity = null; }),
-                )),
+              AbsorbPointer(
+                absorbing: _locationAutoFilled,
+                child: Opacity(
+                  opacity: _locationAutoFilled ? 0.6 : 1.0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.bgElevated,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppTheme.bgMuted)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+                      isExpanded: true, value: _selectedState,
+                      hint: const Text('Select State', style: TextStyle(
+                        fontFamily: 'SpaceGrotesk', color: AppTheme.textFaint, fontSize: 14)),
+                      icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
+                      dropdownColor: AppTheme.bgElevated,
+                      style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
+                      items: _sortedStates.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                      onChanged: (val) => setState(() { _selectedState = val; _selectedCity = null; _locationAutoFilled = false; }),
+                    )),
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
 
               // City dropdown
-              AnimatedOpacity(
-                opacity: _selectedState != null ? 1.0 : 0.4,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: AppTheme.bgElevated,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: _selectedCity != null
-                          ? AppTheme.accent.withOpacity(0.4)
-                          : AppTheme.bgMuted)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: DropdownButtonHideUnderline(child: DropdownButton<String>(
-                    isExpanded: true, value: _selectedCity,
-                    hint: Text(
-                      _selectedState != null ? 'Select City' : 'Select State first',
-                      style: const TextStyle(fontFamily: 'SpaceGrotesk',
-                        color: AppTheme.textFaint, fontSize: 14)),
-                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
-                    dropdownColor: AppTheme.bgElevated,
-                    style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
-                    items: _citiesForState
-                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: _selectedState == null
-                        ? null
-                        : (val) => setState(() => _selectedCity = val),
-                  )),
+              AbsorbPointer(
+                absorbing: _locationAutoFilled,
+                child: AnimatedOpacity(
+                  opacity: _locationAutoFilled ? 0.6 : (_selectedState != null ? 1.0 : 0.4),
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.bgElevated,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _selectedCity != null
+                            ? AppTheme.accent.withOpacity(0.4)
+                            : AppTheme.bgMuted)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: DropdownButtonHideUnderline(child: DropdownButton<String>(
+                      isExpanded: true, value: _selectedCity,
+                      hint: Text(
+                        _selectedState != null ? 'Select City' : 'Select State first',
+                        style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                          color: AppTheme.textFaint, fontSize: 14)),
+                      icon: const Icon(Icons.keyboard_arrow_down_rounded, color: AppTheme.textMuted),
+                      dropdownColor: AppTheme.bgElevated,
+                      style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.text, fontSize: 14),
+                      items: _citiesForState
+                          .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                          .toList(),
+                      onChanged: _selectedState == null
+                          ? null
+                          : (val) => setState(() => _selectedCity = val),
+                    )),
+                  ),
                 ),
               ),
 

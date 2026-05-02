@@ -4,7 +4,9 @@ import 'services/auth_provider.dart';
 import 'theme/app_theme.dart';
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/auth/oauth_complete_profile_screen.dart';
 import 'screens/main_shell.dart';
+import 'screens/profile/admin_dashboard_screen.dart';
 
 // Firebase imports — only used if google-services.json is present
 import 'package:firebase_core/firebase_core.dart';
@@ -126,7 +128,7 @@ class _RootRouterState extends State<_RootRouter> {
 
     final auth = context.watch<AuthProvider>();
 
-    if (auth.status == AuthStatus.unknown || auth.isLoading) {
+    if (auth.status == AuthStatus.unknown) {
       return const Scaffold(
         backgroundColor: Color(0xFF0D0F1A),
         body: Center(
@@ -138,6 +140,17 @@ class _RootRouterState extends State<_RootRouter> {
       );
     }
 
-    return auth.isAuthenticated ? const MainShell() : const LoginScreen();
+    if (!auth.isAuthenticated) return const LoginScreen();
+
+    // OAuth user who was restored from storage mid-registration — route them
+    // directly to profile completion instead of MainShell (which would crash
+    // because every screen expects a non-null currentUserId).
+    if (auth.needsProfileCompletion) return const OAuthCompleteProfileScreen();
+
+    if (auth.currentUser?.role == 'ROLE_ADMIN') {
+      return const AdminDashboardScreen();
+    }
+
+    return const MainShell();
   }
 }

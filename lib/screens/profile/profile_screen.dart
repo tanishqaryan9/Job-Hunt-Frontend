@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_provider.dart';
@@ -10,6 +12,7 @@ import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 import 'saved_jobs_screen.dart';
 import 'applicant_detail_screen.dart';
+import 'admin_dashboard_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -344,8 +347,59 @@ class _ProfileScreenState extends State<ProfileScreen>
           )),
     );
     if (ok == true && mounted) {
+      Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
       await context.read<AuthProvider>().logout();
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    }
+  }
+
+  Future<void> _deleteAccount() async {
+    if (_profile == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+                color: AppTheme.bgCard,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: AppTheme.rose.withOpacity(0.5), width: 1)),
+            padding: const EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Delete Account', style: TextStyle(fontFamily: 'SpaceGrotesk',
+                  fontWeight: FontWeight.w700, fontSize: 20, color: AppTheme.rose)),
+              const SizedBox(height: 8),
+              const Text('Are you sure you want to permanently delete your account? This action cannot be undone.', style: TextStyle(
+                  fontFamily: 'SpaceGrotesk', fontSize: 14, color: AppTheme.textMuted)),
+              const SizedBox(height: 24),
+              Row(children: [
+                Expanded(child: BrutalButton(
+                    label: 'Cancel',
+                    onPressed: () => Navigator.pop(context, false),
+                    color: AppTheme.bgElevated, textColor: AppTheme.text)),
+                const SizedBox(width: 12),
+                Expanded(child: BrutalButton(
+                    label: 'Delete',
+                    onPressed: () => Navigator.pop(context, true),
+                    color: AppTheme.rose)),
+              ]),
+            ]),
+          )),
+    );
+    if (ok == true && mounted) {
+      try {
+        await apiService.deleteUser(_profile!.id);
+        if (mounted) {
+          await context.read<AuthProvider>().logout();
+          Navigator.of(context, rootNavigator: true).popUntil((r) => r.isFirst);
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Failed to delete account. Please try again.'),
+              backgroundColor: AppTheme.rose,
+              behavior: SnackBarBehavior.floating));
+        }
+      }
     }
   }
 
@@ -585,13 +639,19 @@ class _ProfileScreenState extends State<ProfileScreen>
                           Row(children: [
                             const Icon(Icons.location_on_outlined, size: 11, color: AppTheme.textFaint),
                             const SizedBox(width: 3),
-                            Text(job.location, style: const TextStyle(fontFamily: 'SpaceGrotesk',
-                                fontSize: 12, color: AppTheme.textMuted)),
+                            Flexible(
+                              child: Text(job.location, style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                                  fontSize: 12, color: AppTheme.textMuted),
+                                  overflow: TextOverflow.ellipsis),
+                            ),
                             const SizedBox(width: 10),
                             // FIX: Use currency icon + salaryDisplay (no double ₹)
                             const Icon(Icons.currency_rupee, size: 11, color: AppTheme.accent),
-                            Text(job.salaryDisplay, style: const TextStyle(fontFamily: 'SpaceGrotesk',
-                                fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.accent)),
+                            Flexible(
+                              child: Text(job.salaryDisplay, style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                                  fontWeight: FontWeight.w700, fontSize: 12, color: AppTheme.accent),
+                                  overflow: TextOverflow.ellipsis),
+                            ),
                           ]),
                         ])),
                         JobTypeBadge(type: job.jobType),
@@ -683,6 +743,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         _ActionRow(icon: Icons.help_outline_rounded, label: 'Help & Support', onTap: () => _showComingSoon('Help & Support')),
         const SizedBox(height: 8),
         _ActionRow(icon: Icons.logout_rounded, label: 'Sign Out', onTap: _logout, danger: true),
+        _ActionRow(icon: Icons.delete_forever_rounded, label: 'Delete Account', onTap: _deleteAccount, danger: true),
       ]),
     );
   }
@@ -779,6 +840,56 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
   late final _numCtrl  = TextEditingController(text: widget.profile.number);
   late final _expCtrl  = TextEditingController(text: '${widget.profile.experience}');
   final bool _saving   = false;
+  bool _gettingLoc = false;
+
+  Future<void> _autoDetectLocation() async {
+    setState(() => _gettingLoc = true);
+    try {
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Permission denied — please select manually.'),
+          backgroundColor: AppTheme.amber, behavior: SnackBarBehavior.floating));
+        }
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium));
+
+      String? detectedState, detectedCity;
+      try {
+        final placemarks = await placemarkFromCoordinates(pos.latitude, pos.longitude);
+        if (placemarks.isNotEmpty) {
+          final p = placemarks.first;
+          detectedState = p.administrativeArea;
+          detectedCity = p.locality?.isNotEmpty == true ? p.locality : p.subAdministrativeArea;
+        }
+      } catch (_) {}
+
+      if (detectedState != null) {
+        setState(() {
+          _locCtrl.text = '${detectedCity ?? ''}, $detectedState'.trim().replaceAll(RegExp(r'^,\s*'), '');
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Location detected!'),
+            backgroundColor: AppTheme.teal, behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 2),
+          ));
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Could not get GPS — select manually.'),
+        backgroundColor: AppTheme.rose, behavior: SnackBarBehavior.floating));
+      }
+    } finally {
+      if (mounted) setState(() => _gettingLoc = false);
+    }
+  }
 
   @override
   void dispose() { _nameCtrl.dispose(); _locCtrl.dispose(); _numCtrl.dispose(); _expCtrl.dispose(); super.dispose(); }
@@ -831,7 +942,17 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
             BrutalTextField(label: 'City / Location', controller: _locCtrl,
                 prefixIcon: const Icon(Icons.location_on_outlined),
                 validator: (v) => v == null || v.trim().isEmpty ? 'Location is required' : null),
-            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _gettingLoc ? null : _autoDetectLocation,
+                icon: _gettingLoc 
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal))
+                  : const Icon(Icons.my_location_rounded, size: 14, color: AppTheme.teal),
+                label: const Text('Auto-detect', style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.teal)),
+              ),
+            ),
+            const SizedBox(height: 8),
             const _FieldLabel('Phone Number'), const SizedBox(height: 6),
             BrutalTextField(label: 'Phone Number', controller: _numCtrl,
                 keyboardType: TextInputType.phone,
@@ -1179,6 +1300,18 @@ class _VerifyAccountSheetState extends State<_VerifyAccountSheet> {
   bool _otpSent   = false;
   bool _sending   = false;
   bool _verifying = false;
+  String? _emailWarning;
+  bool _checkingEmail = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill with the user's signup email (username IS the email in this app).
+    // This ensures the verification is tied to the original account.
+    if (widget.username != null && widget.username!.contains('@')) {
+      _emailCtrl.text = widget.username!;
+    }
+  }
 
   @override
   void dispose() {
@@ -1205,18 +1338,61 @@ class _VerifyAccountSheetState extends State<_VerifyAccountSheet> {
     return fallback;
   }
 
-  Future<void> _sendOtp() async {
-    final email = _emailCtrl.text.trim();
-    if (email.isEmpty) return;
+  /// Validates that the entered email matches the signup email.
+  /// If different, checks whether it's already registered by another account.
+  Future<bool> _validateEmail() async {
+    final email = _emailCtrl.text.trim().toLowerCase();
+    if (email.isEmpty) {
+      _showError('Please enter an email address');
+      return false;
+    }
     if (!RegExp(r'^[\w\-\.]+@([\w\-]+\.)+[\w\-]{2,4}$').hasMatch(email)) {
       _showError('Please enter a valid email address');
-      return;
+      return false;
     }
+
+    // If it matches the signup email, no further checks needed
+    final signupEmail = widget.username?.toLowerCase().trim() ?? '';
+    if (email == signupEmail) {
+      setState(() => _emailWarning = null);
+      return true;
+    }
+
+    // Different email entered — check if it's already registered
+    setState(() => _checkingEmail = true);
+    try {
+      final result = await apiService.checkAvailability(username: email);
+      if (!mounted) return false;
+      if (result['usernameTaken'] == true) {
+        setState(() {
+          _emailWarning = 'This email is already registered to another account.';
+          _checkingEmail = false;
+        });
+        _showError('This email is already registered. Please use your signup email: ${widget.username ?? ""}');
+        return false;
+      }
+      // Not registered but differs from signup email — warn but allow
+      setState(() {
+        _emailWarning = 'This differs from your signup email. OTP will be sent here.';
+        _checkingEmail = false;
+      });
+      return true;
+    } catch (_) {
+      setState(() => _checkingEmail = false);
+      // Network error — proceed anyway, backend will reject if invalid
+      return true;
+    }
+  }
+
+  Future<void> _sendOtp() async {
+    final valid = await _validateEmail();
+    if (!valid) return;
+
     setState(() => _sending = true);
     try {
       await apiService.sendOtp(
         type: 'EMAIL',
-        value: email,
+        value: _emailCtrl.text.trim(),
         username: widget.username,
       );
       if (!mounted) return;
@@ -1277,18 +1453,60 @@ class _VerifyAccountSheetState extends State<_VerifyAccountSheet> {
                 style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.textMuted)),
               const SizedBox(height: 24),
               if (!_otpSent) ...[
+                // Hint: show which email was used at signup
+                if (widget.username != null && widget.username!.contains('@'))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.accent.withOpacity(0.07),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.accent.withOpacity(0.2)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.info_outline_rounded, size: 14, color: AppTheme.accent),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(
+                          'Use the email you signed up with (${widget.username}) for seamless verification.',
+                          style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 11, color: AppTheme.accent),
+                        )),
+                      ]),
+                    ),
+                  ),
                 BrutalTextField(
                   label: 'Email Address',
                   controller: _emailCtrl,
                   prefixIcon: const Icon(Icons.email_outlined),
                   keyboardType: TextInputType.emailAddress,
                 ),
+                // Warning for mismatched / already-registered email
+                if (_emailWarning != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amber.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.amber.withOpacity(0.3)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.warning_amber_rounded, size: 14, color: AppTheme.amber),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(
+                          _emailWarning!,
+                          style: const TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 11, color: AppTheme.amber),
+                        )),
+                      ]),
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 BrutalButton(
                   label: 'Send OTP',
-                  isLoading: _sending,
+                  isLoading: _sending || _checkingEmail,
                   width: double.infinity,
-                  onPressed: _sending ? null : _sendOtp,
+                  onPressed: (_sending || _checkingEmail) ? null : _sendOtp,
                 ),
               ] else ...[
                 Text('Enter the code sent to ${_emailCtrl.text}',
@@ -1303,7 +1521,7 @@ class _VerifyAccountSheetState extends State<_VerifyAccountSheet> {
                 ),
                 const SizedBox(height: 12),
                 GestureDetector(
-                  onTap: _sending ? null : () => setState(() { _otpSent = false; _otpCtrl.clear(); }),
+                  onTap: _sending ? null : () => setState(() { _otpSent = false; _otpCtrl.clear(); _emailWarning = null; }),
                   child: const Text('Wrong email? Go back',
                     style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12,
                       color: AppTheme.accent, decoration: TextDecoration.underline)),
@@ -1325,7 +1543,7 @@ class _VerifyAccountSheetState extends State<_VerifyAccountSheet> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ADD SKILL SHEET
+// ADD SKILL SHEET — supports both selecting existing skills AND creating new ones
 // ═══════════════════════════════════════════════════════════════════════════
 class _AddSkillSheet extends StatefulWidget {
   final List<Skill> allSkills;
@@ -1337,10 +1555,54 @@ class _AddSkillSheet extends StatefulWidget {
 
 class _AddSkillSheetState extends State<_AddSkillSheet> {
   String _search = '';
+  bool _creating = false;
+
   List<Skill> get _filtered => widget.allSkills
       .where((s) => !widget.existingSkillIds.contains(s.id) &&
           s.name.toLowerCase().contains(_search.toLowerCase()))
       .toList();
+
+  /// Whether the search text exactly matches an existing skill name (case-insensitive)
+  bool get _exactMatchExists => widget.allSkills.any(
+      (s) => s.name.toLowerCase() == _search.trim().toLowerCase());
+
+  /// Show "Create" option when search text is non-empty, doesn't exactly match an existing skill,
+  /// and is at least 2 characters long
+  bool get _showCreateOption =>
+      _search.trim().length >= 2 && !_exactMatchExists;
+
+  Future<void> _createAndAdd() async {
+    final name = _search.trim();
+    if (name.isEmpty) return;
+    setState(() => _creating = true);
+    try {
+      // Create the skill on the backend
+      final newSkill = await apiService.createSkill(name);
+      // Add it to the user's profile
+      widget.onAdd(newSkill);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _creating = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to create skill: ${_parseError(e)}'),
+          backgroundColor: AppTheme.rose,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  String _parseError(dynamic e) {
+    try {
+      final data = (e as dynamic).response?.data;
+      if (data is Map) {
+        final msg = (data['error'] ?? data['message'])?.toString();
+        if (msg != null && msg.isNotEmpty) return msg;
+      }
+    } catch (_) {}
+    return 'Please try again.';
+  }
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1360,14 +1622,53 @@ class _AddSkillSheetState extends State<_AddSkillSheet> {
           GestureDetector(onTap: () => Navigator.pop(context),
               child: const Icon(Icons.close_rounded, color: AppTheme.textMuted)),
         ]),
+        const SizedBox(height: 4),
+        const Text('Search existing skills or type a new one to create it.',
+            style: TextStyle(fontFamily: 'SpaceGrotesk', fontSize: 12, color: AppTheme.textFaint)),
         const SizedBox(height: 16),
-        BrutalTextField(label: 'Search skills',
+        BrutalTextField(label: 'Search or create skill',
             prefixIcon: const Icon(Icons.search_rounded),
             onChanged: (v) => setState(() => _search = v)),
       ])),
+
+      // "Create new skill" button
+      if (_showCreateOption)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+          child: GestureDetector(
+            onTap: _creating ? null : _createAndAdd,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                gradient: AppTheme.accentGradient,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: AppTheme.accentShadow(),
+              ),
+              child: Row(children: [
+                _creating
+                    ? const SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.add_rounded, size: 18, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text(
+                  'Create "${_search.trim()}"',
+                  style: const TextStyle(fontFamily: 'SpaceGrotesk',
+                      fontWeight: FontWeight.w700, fontSize: 14, color: Colors.white),
+                  overflow: TextOverflow.ellipsis,
+                )),
+              ]),
+            ),
+          ),
+        ),
+
+      // Existing skills list
       Expanded(child: _filtered.isEmpty
-          ? const Center(child: Text('No skills found', style: TextStyle(
-              fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)))
+          ? Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                _search.isEmpty ? 'Type to search skills' : 'No matching skills found',
+                style: const TextStyle(fontFamily: 'SpaceGrotesk', color: AppTheme.textMuted)),
+            ))
           : ListView.builder(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               itemCount: _filtered.length,

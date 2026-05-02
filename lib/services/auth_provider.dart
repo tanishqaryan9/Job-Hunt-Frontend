@@ -39,12 +39,17 @@ class AuthProvider extends ChangeNotifier {
 
   UserProfile? get userProfile => _currentUser;
 
-  /// FIX: If a token exists but no profile_id is stored, the stored session is
-  /// stale/incomplete (e.g. app was killed right after login before profile_id
-  /// was written, or a previous version didn't persist it). Rather than
-  /// marking the user as authenticated and letting every screen fail with 401,
-  /// we clear the bad tokens and send them back to login so they can
-  /// re-authenticate cleanly.
+  /// Restores a previous session from secure storage on app launch.
+  ///
+  /// Three cases are handled:
+  ///   1. Full session (token + profile_id) → authenticated, load profile.
+  ///   2. Partial OAuth session (token + app_user_id, no profile_id) → authenticated
+  ///      but [needsProfileCompletion] is true.  The [_RootRouter] will route
+  ///      to [OAuthCompleteProfileScreen] so the user can finish registration.
+  ///      We must NOT clear the tokens here — doing so wipes the app_user_id
+  ///      and causes "No app user ID — please log in again" on Save.
+  ///   3. Token only (no profile_id, no app_user_id) → truly broken session,
+  ///      clear tokens and send back to login.
   Future<void> tryRestoreSession() async {
     _isLoading = true;
     notifyListeners();
@@ -55,21 +60,27 @@ class AuthProvider extends ChangeNotifier {
       final appUserId = await apiService.getAppUserId();
 
       if (profileId != null) {
-        // Happy path: full session is intact
+        // Case 1 — happy path: full session is intact.
         _currentUserId = profileId;
         _appUserId = appUserId;
         _username = await apiService.getUsername();
         _status = AuthStatus.authenticated;
         _registerFcmToken(profileId);
-        // Eagerly load the full UserProfile in the background without blocking startup.
-        apiService.getUserById(profileId).then((profile) {
-          _currentUser = profile;
-          notifyListeners();
-        }).catchError((_) {
-          // Non-fatal: screens will reload the profile independently if needed
-        });
+        // Eagerly load the full UserProfile in the background.
+        try {
+          _currentUser = await apiService.getUserById(profileId);
+        } catch (_) {
+          // Non-fatal: screens will reload the profile independently if needed.
+        }
+      } else if (appUserId != null) {
+        // Case 2 — OAuth user who was killed before completing their profile.
+        // Keep the tokens so OAuthCompleteProfileScreen can call the backend.
+        _appUserId = appUserId;
+        _status = AuthStatus.authenticated;
+        // _currentUserId stays null → needsProfileCompletion == true.
       } else {
-        // Token exists but no profile_id — session is broken. Clear and restart.
+        // Case 3 — token exists but neither profile_id nor app_user_id is
+        // stored.  This is a genuinely broken session (e.g. old app version).
         await apiService.clearTokens();
         _status = AuthStatus.unauthenticated;
       }
@@ -102,11 +113,14 @@ class AuthProvider extends ChangeNotifier {
       final auth = await apiService
           .login(LoginRequest(username: username, password: password));
       _applyAuthResponse(auth);
-      _isLoading = false;
-      notifyListeners();
       if (_currentUserId != null) {
+        try {
+          _currentUser = await apiService.getUserById(_currentUserId!);
+        } catch (_) {}
         _registerFcmToken(_currentUserId!);
       }
+      _isLoading = false;
+      notifyListeners();
       return true;
     } catch (e) {
       _error = _parseError(e, isLogin: true);
@@ -123,11 +137,14 @@ class AuthProvider extends ChangeNotifier {
     try {
       final auth = await apiService.signup(req);
       _applyAuthResponse(auth);
-      _isLoading = false;
-      notifyListeners();
       if (_currentUserId != null) {
+        try {
+          _currentUser = await apiService.getUserById(_currentUserId!);
+        } catch (_) {}
         _registerFcmToken(_currentUserId!);
       }
+      _isLoading = false;
+      notifyListeners();
       return true;
     } catch (e) {
       _error = _parseError(e, isLogin: false);
@@ -160,11 +177,15 @@ class AuthProvider extends ChangeNotifier {
       if (_currentUserId == null) {
         await _fetchAndSetUserId();
       }
-      _isLoading = false;
-      notifyListeners();
+      
       if (_currentUserId != null) {
+        try {
+          _currentUser = await apiService.getUserById(_currentUserId!);
+        } catch (_) {}
         _registerFcmToken(_currentUserId!);
       }
+      _isLoading = false;
+      notifyListeners();
       return true;
     } catch (e) {
       _error = 'OAuth login failed. Please try again.';
