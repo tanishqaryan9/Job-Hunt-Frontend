@@ -12,7 +12,6 @@ import '../../models/models.dart';
 import '../../widgets/brutal_widgets.dart';
 import 'saved_jobs_screen.dart';
 import 'applicant_detail_screen.dart';
-import 'admin_dashboard_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});

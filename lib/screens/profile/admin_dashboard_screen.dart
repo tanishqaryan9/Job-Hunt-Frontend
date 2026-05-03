@@ -136,6 +136,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
         ],
       ),
     );
+    ctrl.dispose();
 
     if (name != null && name.isNotEmpty && mounted) {
       try {

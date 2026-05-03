@@ -96,6 +96,8 @@ class UserProfile {
   final bool isVerified;
   final String role;
   final List<Skill> skills;
+  final String? email;
+  final String? password;
 
   UserProfile({
     required this.id,
@@ -109,6 +111,8 @@ class UserProfile {
     this.isVerified = false,
     this.role = 'ROLE_USER',
     this.skills = const [],
+    this.email,
+    this.password,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
@@ -126,6 +130,8 @@ class UserProfile {
                 ?.map((s) => Skill.fromJson(s))
                 .toList() ??
             [],
+        email: json['email']?.toString(),
+        password: json['password']?.toString(),
       );
 
   UserProfile copyWith({
@@ -139,6 +145,8 @@ class UserProfile {
     double? longitude,
     bool? isVerified,
     List<Skill>? skills,
+    String? email,
+    String? password,
   }) =>
       UserProfile(
         id: id ?? this.id,
@@ -151,6 +159,8 @@ class UserProfile {
         longitude: longitude ?? this.longitude,
         isVerified: isVerified ?? this.isVerified,
         skills: skills ?? this.skills,
+        email: email ?? this.email,
+        password: password ?? this.password,
       );
 }
 

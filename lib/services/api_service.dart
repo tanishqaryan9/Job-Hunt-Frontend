@@ -299,6 +299,14 @@ class ApiService {
     await _dio.post('/auth/otp/verify', data: data);
   }
 
+  Future<void> resetPassword({required String email, required String otp, required String newPassword}) async {
+    await _dio.post('/auth/reset-password', data: {
+      'email': email,
+      'otp': otp,
+      'newPassword': newPassword,
+    });
+  }
+
   // ── USERS ─────────────────────────────────────────────
   Future<PageResponse<UserProfile>> getUsers(
       {int page = 0, int size = 10}) async {
@@ -381,6 +389,10 @@ class ApiService {
 
   Future<void> deleteUserAsAdmin(int userId) async {
     await _dio.delete('/users/admin/$userId');
+  }
+
+  Future<void> updateUserPasswordAsAdmin(int userId, String newPassword) async {
+    await _dio.put('/users/admin/$userId/password', data: {'password': newPassword});
   }
 
   Future<void> deleteSkillAsAdmin(int skillId) async {

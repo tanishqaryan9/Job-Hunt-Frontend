@@ -7,6 +7,7 @@ import '../../widgets/brutal_widgets.dart';
 import '../../screens/main_shell.dart';
 import 'signup_screen.dart';
 import 'oauth_complete_profile_screen.dart';
+import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -250,6 +251,15 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                           onPressed: () => setState(() => _showPassword = !_showPassword),
                         ),
                         validator: (v) => v!.isEmpty ? 'Enter password' : null),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: GestureDetector(
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ForgotPasswordScreen())),
+                          child: const Text('Forgot Password?', style: TextStyle(
+                            fontFamily: 'SpaceGrotesk', fontSize: 13, color: AppTheme.accent, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
                       const SizedBox(height: 28),
                       BrutalButton(
                         label: 'SIGN IN', onPressed: busy ? null : _login,

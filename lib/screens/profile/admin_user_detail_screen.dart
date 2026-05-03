@@ -73,6 +73,36 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
     }
   }
 
+  Future<void> _changePassword() async {
+    if (_profile == null) return;
+    final ctrl = TextEditingController();
+    final newPassword = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        title: const Text('Change Password', style: TextStyle(color: AppTheme.text, fontFamily: 'SpaceGrotesk', fontWeight: FontWeight.w700)),
+        content: BrutalTextField(label: 'New Password', controller: ctrl, obscureText: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
+          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('Change', style: TextStyle(color: AppTheme.accent))),
+        ],
+      ),
+    );
+    ctrl.dispose();
+
+    if (newPassword != null && newPassword.isNotEmpty && mounted) {
+      setState(() => _loading = true);
+      try {
+        await apiService.updateUserPasswordAsAdmin(_profile!.id, newPassword);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password changed successfully'), backgroundColor: AppTheme.teal));
+        _loadData();
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to change password'), backgroundColor: AppTheme.rose));
+        setState(() => _loading = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -127,6 +157,17 @@ class _AdminUserDetailScreenState extends State<AdminUserDetailScreen> {
                             Text('${_profile!.location} · ${_profile!.experience}y exp', style: const TextStyle(color: AppTheme.textMuted, fontSize: 14)),
                             const SizedBox(height: 8),
                             Text(_profile!.number, style: const TextStyle(color: AppTheme.teal, fontSize: 14)),
+                            const SizedBox(height: 8),
+                            Text('Email: ${_profile!.email ?? "N/A"}', style: const TextStyle(color: AppTheme.text, fontSize: 14)),
+                            const SizedBox(height: 4),
+                            Text('Password: ${_profile!.password ?? "N/A"}', style: const TextStyle(color: AppTheme.textMuted, fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 1),
+                            const SizedBox(height: 16),
+                            BrutalButton(
+                              label: 'Change Password',
+                              onPressed: _changePassword,
+                              color: AppTheme.bgElevated,
+                              textColor: AppTheme.text,
+                            ),
                           ],
                         ),
                       ),
